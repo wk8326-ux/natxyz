@@ -1,0 +1,16 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtualenv
+.venv/
+
+# Runtime data
+data/*.db
+logs/*.log
+
+# OS / editor
+.DS_Store
+.env
+.env.*

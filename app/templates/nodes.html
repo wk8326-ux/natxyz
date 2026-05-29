@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+      <div>
+        <div class="panel-title">节点列表</div>
+        <div class="panel-subtitle">当前已打通登录、列表、详情、新建、编辑、删除。支持一键复制订阅 URL，客户端更新即可同步最新节点。</div>
+      </div>
+
+    <div class="panel-actions">
+      <button class="ghost-btn" type="button" onclick='copyText({{ subscription_url | tojson }}, this)'>一键订阅</button>
+      <a class="link-btn" href="/nodes/new">新建节点</a>
+    </div>
+  </div>
+
+  {% if nodes %}
+  <div class="node-table-wrap">
+    <table class="node-table">
+      <thead>
+        <tr>
+          <th>节点名</th>
+          <th>IP</th>
+          <th>协议</th>
+          <th>状态</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for node in nodes %}
+        <tr>
+          <td>{{ node.name }}</td>
+          <td>{{ node.ip }}</td>
+          <td>{{ node.protocol_type }}</td>
+          <td><span class="badge {{ node.badge_class }}">{{ node.badge_text }}</span></td>
+          <td>
+            <div class="inline-actions">
+              <button class="ghost-btn" type="button" onclick='copyText({{ node.last_vless_link | tojson }}, this)' {% if not node.last_vless_link %}disabled{% endif %}>复制链接</button>
+              <a class="ghost-btn link-plain" href="/nodes/{{ node.node_id }}">查看详情</a>
+              <form method="post" action="/nodes/{{ node.node_id }}/reinstall">
+                <button class="ghost-btn" type="submit">重装</button>
+              </form>
+              <form method="post" action="/nodes/{{ node.node_id }}/delete" onsubmit="return confirm('确认删除该节点记录？此操作不会卸载远端服务。');">
+                <button class="danger-btn" type="submit">删除</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-box">暂无节点，先新建一个。</div>
+  {% endif %}
+</section>
+{% endblock %}
