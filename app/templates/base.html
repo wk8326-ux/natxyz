@@ -24,9 +24,16 @@
     </main>
   </div>
   <script>
+    function restoreButtonContent(button, html, ms) {
+      if (!button) return;
+      setTimeout(() => {
+        button.innerHTML = html;
+      }, ms);
+    }
+
     async function copyText(text, button) {
       if (!text) return;
-      const original = button ? button.textContent : '';
+      const originalHtml = button ? button.innerHTML : '';
       try {
         if (navigator.clipboard && window.isSecureContext) {
           await navigator.clipboard.writeText(text);
@@ -42,14 +49,14 @@
           document.body.removeChild(textarea);
         }
         if (button) {
-          button.textContent = '已复制';
-          setTimeout(() => { button.textContent = original; }, 1200);
+          button.innerHTML = '✓';
+          restoreButtonContent(button, originalHtml, 1200);
         }
       } catch (err) {
         console.error(err);
         if (button) {
-          button.textContent = '复制失败';
-          setTimeout(() => { button.textContent = original; }, 1500);
+          button.innerHTML = '✕';
+          restoreButtonContent(button, originalHtml, 1500);
         }
       }
     }

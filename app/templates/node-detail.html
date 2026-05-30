@@ -3,17 +3,28 @@
 {% block content %}
 <section class="panel detail-header">
   <div>
-    <div class="panel-title">{{ node['name'] }}</div>
-    <div class="panel-subtitle">{{ node['ip'] }} · {{ node['protocol_type'] }}</div>
+    <div class="panel-title detail-title-row">
+      <span>{{ node['name'] }}</span>
+      {% if is_chain %}
+      <span class="node-kind-icon" title="链式节点" aria-label="链式节点">⛓</span>
+      {% endif %}
+    </div>
+    <div class="panel-subtitle">
+      {% if is_chain %}
+      链式节点 · 前置 {{ node['front_node_name'] or '-' }} → 后端 {{ node['backend_node_name'] or '-' }}
+      {% else %}
+      {{ node['ip'] }} · {{ node['protocol_type'] }}
+      {% endif %}
+    </div>
   </div>
-  <div>
-    <button class="ghost-btn" type="button" onclick='copyText({{ (node["last_vless_link"] or "") | tojson }}, this)' {% if not node['last_vless_link'] %}disabled{% endif %}>复制链接</button>
+  <div class="detail-actions">
+    <button class="icon-btn" type="button" title="复制链接" aria-label="复制链接" onclick='copyText({{ (node["last_vless_link"] or "") | tojson }}, this)' {% if not node['last_vless_link'] %}disabled{% endif %}>⧉</button>
     <form method="post" action="/nodes/{{ node['node_id'] }}/reinstall" style="display:inline;">
-      <button type="submit">{% if node['generated_uuid'] %}重新部署{% else %}开始部署{% endif %}</button>
+      <button class="icon-btn" type="submit" title="{% if node['generated_uuid'] %}重新部署{% else %}开始部署{% endif %}" aria-label="{% if node['generated_uuid'] %}重新部署{% else %}开始部署{% endif %}">↻</button>
     </form>
+    <a class="icon-btn link-plain" href="/nodes/{{ node['node_id'] }}/edit" title="编辑" aria-label="编辑">✎</a>
+    <a class="icon-btn link-plain" href="/nodes" title="返回列表" aria-label="返回列表">←</a>
     <span class="badge {{ badge_class }}">{{ badge_text }}</span>
-    <a class="ghost-btn link-plain" href="/nodes/{{ node['node_id'] }}/edit">编辑</a>
-    <a class="ghost-btn link-plain" href="/nodes">返回列表</a>
   </div>
 </section>
 
@@ -21,11 +32,18 @@
   <article class="panel">
     <div class="panel-title">基础信息</div>
     <dl class="kv-list">
+      {% if is_chain %}
+      <div><dt>类型</dt><dd>链式节点</dd></div>
+      <div><dt>前置节点</dt><dd>{{ node['front_node_name'] or '未选择' }}</dd></div>
+      <div><dt>后端节点</dt><dd>{{ node['backend_node_name'] or '未选择' }}</dd></div>
+      <div><dt>入口</dt><dd>复用前置节点现有公网入口</dd></div>
+      {% else %}
       <div><dt>节点名</dt><dd>{{ node['name'] }}</dd></div>
       <div><dt>NAT IP</dt><dd>{{ node['ip'] }}</dd></div>
       <div><dt>SSH</dt><dd>{{ node['ssh_user'] }}@{{ node['ip'] }}:{{ node['ssh_port'] }}</dd></div>
       <div><dt>公网端口</dt><dd>{{ node['public_port'] }}</dd></div>
       <div><dt>监听端口</dt><dd>{{ node['listen_port'] }}</dd></div>
+      {% endif %}
       <div><dt>Agent Token</dt><dd class="mono break-all">{{ node['agent_token'] }}</dd></div>
       <div><dt>最后在线</dt><dd>{{ node['last_seen_at'] or '暂无' }}</dd></div>
     </dl>
@@ -35,7 +53,7 @@
     <div class="panel-title">部署信息</div>
     <dl class="kv-list">
       <div><dt>Reality 目标</dt><dd>{{ node['selected_reality_target'] or '暂无' }}</dd></div>
-      <div><dt>UUID</dt><dd class="mono break-all">{{ node['generated_uuid'] or '暂无' }}</dd></div>
+      <div><dt>{% if is_chain %}链式 UUID{% else %}UUID{% endif %}</dt><dd class="mono break-all">{{ node['generated_uuid'] or '暂无' }}</dd></div>
       <div><dt>Public Key</dt><dd class="mono break-all">{{ node['generated_public_key'] or '暂无' }}</dd></div>
       <div><dt>Short ID</dt><dd class="mono break-all">{{ node['generated_short_id'] or '暂无' }}</dd></div>
       <div><dt>导入链接</dt><dd class="mono break-all">{{ node['last_vless_link'] or '暂无成功部署链接' }}</dd></div>

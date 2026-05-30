@@ -19,6 +19,9 @@ CREATE TABLE IF NOT EXISTS nodes (
     ssh_user TEXT NOT NULL,
     ssh_password TEXT NOT NULL,
     protocol_type TEXT NOT NULL DEFAULT 'vless_reality_singbox',
+    front_node_id TEXT,
+    backend_node_id TEXT,
+    chain_mode TEXT,
     public_port INTEGER NOT NULL,
     listen_port INTEGER NOT NULL,
     selected_reality_target TEXT,
@@ -32,7 +35,9 @@ CREATE TABLE IF NOT EXISTS nodes (
     last_seen_at TEXT,
     last_report_json TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(front_node_id) REFERENCES nodes(node_id),
+    FOREIGN KEY(backend_node_id) REFERENCES nodes(node_id)
 );
 """
 
@@ -72,6 +77,26 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 """
 
+TAG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS tags (
+    tag_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    color TEXT NOT NULL DEFAULT '#4c8dff',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+NODE_TAG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS node_tags (
+    node_id TEXT NOT NULL,
+    tag_id TEXT NOT NULL,
+    PRIMARY KEY (node_id, tag_id),
+    FOREIGN KEY(node_id) REFERENCES nodes(node_id) ON DELETE CASCADE,
+    FOREIGN KEY(tag_id) REFERENCES tags(tag_id) ON DELETE CASCADE
+);
+"""
+
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -93,19 +118,65 @@ def now_iso() -> str:
 
 
 
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {row["name"] for row in rows}
+
+
+
+def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, column_definition: str) -> None:
+    if column_name in _table_columns(conn, table_name):
+        return
+    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
+
+
+
+def migrate_db(conn: sqlite3.Connection) -> None:
+    _ensure_column(conn, "nodes", "front_node_id", "TEXT")
+    _ensure_column(conn, "nodes", "backend_node_id", "TEXT")
+    _ensure_column(conn, "nodes", "chain_mode", "TEXT")
+    _ensure_column(conn, "nodes", "manual_country_code", "TEXT")
+    _ensure_column(conn, "nodes", "manual_region_label", "TEXT")
+
+
+
 def init_db() -> None:
     with get_conn() as conn:
         conn.execute(NODE_SCHEMA)
         conn.execute(DEPLOY_SCHEMA)
         conn.execute(REPORT_SCHEMA)
         conn.execute(SETTINGS_SCHEMA)
+        conn.execute(TAG_SCHEMA)
+        conn.execute(NODE_TAG_SCHEMA)
+        migrate_db(conn)
 
 
 
 def list_nodes() -> list[sqlite3.Row]:
     with get_conn() as conn:
         return conn.execute(
-            "SELECT * FROM nodes ORDER BY updated_at DESC, created_at DESC"
+            """
+            SELECT
+                nodes.*,
+                front.name AS front_node_name,
+                backend.name AS backend_node_name
+            FROM nodes
+            LEFT JOIN nodes AS front ON nodes.front_node_id = front.node_id
+            LEFT JOIN nodes AS backend ON nodes.backend_node_id = backend.node_id
+            ORDER BY nodes.updated_at DESC, nodes.created_at DESC
+            """
+        ).fetchall()
+
+
+
+def list_direct_vless_nodes() -> list[sqlite3.Row]:
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            SELECT * FROM nodes
+            WHERE protocol_type = 'vless_reality_singbox'
+            ORDER BY updated_at DESC, created_at DESC
+            """
         ).fetchall()
 
 
@@ -125,13 +196,23 @@ def list_subscribable_nodes() -> list[sqlite3.Row]:
 def get_node(node_id: str) -> sqlite3.Row | None:
     with get_conn() as conn:
         return conn.execute(
-            "SELECT * FROM nodes WHERE node_id = ?", (node_id,)
+            """
+            SELECT
+                nodes.*,
+                front.name AS front_node_name,
+                backend.name AS backend_node_name
+            FROM nodes
+            LEFT JOIN nodes AS front ON nodes.front_node_id = front.node_id
+            LEFT JOIN nodes AS backend ON nodes.backend_node_id = backend.node_id
+            WHERE nodes.node_id = ?
+            """,
+            (node_id,),
         ).fetchone()
 
 
 
 def find_node_by_endpoint(ip: str, ssh_port: int, exclude_node_id: str | None = None) -> sqlite3.Row | None:
-    query = "SELECT * FROM nodes WHERE ip = ? AND ssh_port = ?"
+    query = "SELECT * FROM nodes WHERE ip = ? AND ssh_port = ? AND protocol_type = 'vless_reality_singbox'"
     params: list[Any] = [ip, ssh_port]
     if exclude_node_id:
         query += " AND node_id != ?"
@@ -188,17 +269,19 @@ def validate_subscription_token(token: str) -> bool:
 def create_node_record(payload: dict[str, Any]) -> str:
     node_id = build_node_id()
     ts = now_iso()
+    protocol_type = payload.get("protocol_type") or "vless_reality_singbox"
     with get_conn() as conn:
         conn.execute(
             """
             INSERT INTO nodes (
                 node_id, name, ip, ssh_port, ssh_user, ssh_password,
-                protocol_type, public_port, listen_port,
+                protocol_type, front_node_id, backend_node_id, chain_mode,
+                public_port, listen_port,
                 selected_reality_target, generated_uuid, generated_private_key,
                 generated_public_key, generated_short_id, last_vless_link,
                 agent_token, status, last_seen_at, last_report_json,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 node_id,
@@ -207,7 +290,10 @@ def create_node_record(payload: dict[str, Any]) -> str:
                 payload["ssh_port"],
                 payload["ssh_user"],
                 payload["ssh_password"],
-                "vless_reality_singbox",
+                protocol_type,
+                payload.get("front_node_id"),
+                payload.get("backend_node_id"),
+                payload.get("chain_mode"),
                 payload["public_port"],
                 payload["listen_port"],
                 None,
@@ -238,8 +324,14 @@ def update_node_record(node_id: str, payload: dict[str, Any]) -> None:
                 ssh_port = ?,
                 ssh_user = ?,
                 ssh_password = ?,
+                protocol_type = COALESCE(?, protocol_type),
+                front_node_id = ?,
+                backend_node_id = ?,
+                chain_mode = ?,
                 public_port = ?,
                 listen_port = ?,
+                manual_country_code = ?,
+                manual_region_label = ?,
                 updated_at = ?
             WHERE node_id = ?
             """,
@@ -249,12 +341,75 @@ def update_node_record(node_id: str, payload: dict[str, Any]) -> None:
                 payload["ssh_port"],
                 payload["ssh_user"],
                 payload["ssh_password"],
+                payload.get("protocol_type"),
+                payload.get("front_node_id"),
+                payload.get("backend_node_id"),
+                payload.get("chain_mode"),
                 payload["public_port"],
                 payload["listen_port"],
+                payload.get("manual_country_code"),
+                payload.get("manual_region_label"),
                 now_iso(),
                 node_id,
             ),
         )
+
+
+
+def list_tags() -> list[sqlite3.Row]:
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM tags ORDER BY name COLLATE NOCASE").fetchall()
+
+
+def create_tag(name: str, color: str) -> str:
+    tag_id = f"tag_{uuid.uuid4().hex[:10]}"
+    ts = now_iso()
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO tags (tag_id, name, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (tag_id, name, color, ts, ts),
+        )
+    return tag_id
+
+
+def delete_tag(tag_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM node_tags WHERE tag_id = ?", (tag_id,))
+        conn.execute("DELETE FROM tags WHERE tag_id = ?", (tag_id,))
+
+
+def list_node_tag_ids(node_id: str) -> list[str]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT tag_id FROM node_tags WHERE node_id = ?", (node_id,)).fetchall()
+        return [row["tag_id"] for row in rows]
+
+
+def set_node_tags(node_id: str, tag_ids: list[str]) -> None:
+    clean_ids = [tag_id for tag_id in dict.fromkeys(tag_ids) if tag_id]
+    with get_conn() as conn:
+        if clean_ids:
+            placeholders = ",".join("?" for _ in clean_ids)
+            rows = conn.execute(f"SELECT tag_id FROM tags WHERE tag_id IN ({placeholders})", clean_ids).fetchall()
+            clean_ids = [row["tag_id"] for row in rows]
+        conn.execute("DELETE FROM node_tags WHERE node_id = ?", (node_id,))
+        for tag_id in clean_ids:
+            conn.execute("INSERT OR IGNORE INTO node_tags (node_id, tag_id) VALUES (?, ?)", (node_id, tag_id))
+
+
+def list_node_tags_map() -> dict[str, list[dict[str, str]]]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT nt.node_id, t.tag_id, t.name, t.color
+            FROM node_tags nt
+            JOIN tags t ON nt.tag_id = t.tag_id
+            ORDER BY t.name COLLATE NOCASE
+            """
+        ).fetchall()
+    result: dict[str, list[dict[str, str]]] = {}
+    for row in rows:
+        result.setdefault(row["node_id"], []).append({"tag_id": row["tag_id"], "name": row["name"], "color": row["color"]})
+    return result
 
 
 
@@ -299,12 +454,13 @@ def create_demo_node() -> None:
             """
             INSERT INTO nodes (
                 node_id, name, ip, ssh_port, ssh_user, ssh_password,
-                protocol_type, public_port, listen_port,
+                protocol_type, front_node_id, backend_node_id, chain_mode,
+                public_port, listen_port,
                 selected_reality_target, generated_uuid, generated_private_key,
                 generated_public_key, generated_short_id, last_vless_link,
                 agent_token, status, last_seen_at, last_report_json,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "node_demo_001",
@@ -314,6 +470,9 @@ def create_demo_node() -> None:
                 "root",
                 "demo-password",
                 "vless_reality_singbox",
+                None,
+                None,
+                None,
                 443,
                 443,
                 "www.microsoft.com",

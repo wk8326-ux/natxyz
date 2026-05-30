@@ -3,12 +3,13 @@ from __future__ import annotations
 import os
 import uuid
 
+import pytest
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("NAT_WEBUI_DB_PATH", f"/tmp/nat_webui_test_{uuid.uuid4().hex}.db")
 
 from app import jobs, main
-from app.db import init_db
+from app.db import create_node_record, get_node, init_db, list_nodes
 from app.main import app
 
 init_db()
@@ -55,6 +56,8 @@ def test_nodes_page_after_login() -> None:
     assert response.status_code == 200
     assert "节点列表" in response.text
     assert "新建节点" in response.text
+    assert "复制 v2rayN 订阅 URL" in response.text
+    assert "复制 Clash 订阅 URL" in response.text
 
 
 def test_create_reinstall_and_delete_node_flow(monkeypatch) -> None:
@@ -145,6 +148,7 @@ def test_create_reinstall_and_delete_node_flow(monkeypatch) -> None:
 
     after_reinstall = client.get(detail_url)
     assert "vless://fake-uuid@198.51.100.20:44322" in after_reinstall.text
+    assert "title=\"复制链接\"" in after_reinstall.text
 
     delete_response = client.post(f"/nodes/{node_id}/delete", follow_redirects=False)
     assert delete_response.status_code == 303
@@ -186,3 +190,63 @@ def test_create_node_rejects_duplicate_ip_and_ssh_port() -> None:
     )
     assert response.status_code == 200
     assert "已存在相同 IP + SSH 端口 的节点记录" in response.text
+
+
+def test_create_chain_node_record_preserves_front_and_backend_references() -> None:
+    front_id = create_node_record(
+        {
+            "name": "FRONT_FOR_CHAIN",
+            "ip": "198.51.100.31",
+            "ssh_port": 2231,
+            "ssh_user": "root",
+            "ssh_password": "front-pass",
+            "public_port": 443,
+            "listen_port": 443,
+        }
+    )
+    backend_id = create_node_record(
+        {
+            "name": "BACKEND_FOR_CHAIN",
+            "ip": "198.51.100.32",
+            "ssh_port": 2232,
+            "ssh_user": "root",
+            "ssh_password": "backend-pass",
+            "public_port": 443,
+            "listen_port": 443,
+        }
+    )
+    chain_id = create_node_record(
+        {
+            "name": "CHAIN_FRONT_TO_BACKEND",
+            "ip": "198.51.100.31",
+            "ssh_port": 2231,
+            "ssh_user": "root",
+            "ssh_password": "front-pass",
+            "protocol_type": "vless_chain",
+            "front_node_id": front_id,
+            "backend_node_id": backend_id,
+            "chain_mode": "vless_reality_to_vless_reality",
+            "public_port": 443,
+            "listen_port": 443,
+        }
+    )
+
+    chain = get_node(chain_id)
+    assert chain is not None
+    assert chain["protocol_type"] == "vless_chain"
+    assert chain["front_node_id"] == front_id
+    assert chain["backend_node_id"] == backend_id
+    assert chain["chain_mode"] == "vless_reality_to_vless_reality"
+    assert chain["front_node_name"] == "FRONT_FOR_CHAIN"
+    assert chain["backend_node_name"] == "BACKEND_FOR_CHAIN"
+
+    listed = {node["node_id"]: node for node in list_nodes()}
+    assert listed[chain_id]["front_node_name"] == "FRONT_FOR_CHAIN"
+    assert listed[chain_id]["backend_node_name"] == "BACKEND_FOR_CHAIN"
+
+
+def test_phase2_markdown_exists() -> None:
+    with open("PHASE2.md", "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "Phase 2 Development Constraints" in content
+    assert "VLESS + Reality -> VLESS + Reality" in content

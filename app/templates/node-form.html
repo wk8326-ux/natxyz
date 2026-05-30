@@ -5,10 +5,21 @@
   <div class="panel-head">
       <div>
         <div class="panel-title">{{ title }}</div>
-        <div class="panel-subtitle">保存仅更新节点资料；真正安装请到节点详情页点“开始部署”或“重新部署”。</div>
+        <div class="panel-subtitle">
+          {% if is_chain_form %}
+          创建独立链式节点记录：复用前置节点现有入口，通过链式专用用户 + 路由规则转发到后端，不新增公网端口。
+          {% else %}
+          创建普通 VLESS + Reality 单节点，保留原有 SSH / NAT / 端口字段。
+          {% endif %}
+        </div>
       </div>
 
     <div class="panel-actions">
+      {% if is_chain_form %}
+      <a class="ghost-btn link-plain" href="/nodes/new">切到单节点</a>
+      {% else %}
+      <a class="ghost-btn link-plain" href="/nodes/new-chain">新建链式节点</a>
+      {% endif %}
       <a class="ghost-btn link-plain" href="{% if node_id %}/nodes/{{ node_id }}{% else %}/nodes{% endif %}">返回</a>
     </div>
   </div>
@@ -24,11 +35,42 @@
   {% endif %}
 
   <form method="post" class="stack-form">
+    <input type="hidden" name="protocol_type" value="{% if is_chain_form %}{{ protocol_chain }}{% else %}{{ protocol_direct }}{% endif %}">
     <div class="form-grid">
-      <label>
+      <label class="full-span">
         <span>节点名</span>
         <input type="text" name="name" value="{{ form_values['name'] }}" required>
       </label>
+
+      {% if is_chain_form %}
+      <div class="full-span">
+        <div class="field-note">链式节点必须选择两个已有直连节点；客户端最终连接前置节点，后端作为落地出口。</div>
+      </div>
+      <label>
+        <span>前置节点</span>
+        <select name="front_node_id" required>
+          <option value="">请选择前置节点</option>
+          {% for item in direct_nodes %}
+          <option value="{{ item['node_id'] }}" {% if form_values.get('front_node_id') == item['node_id'] %}selected{% endif %}>{{ item['name'] }} · {{ item['ip'] }}:{{ item['public_port'] }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>后端节点</span>
+        <select name="backend_node_id" required>
+          <option value="">请选择后端节点</option>
+          {% for item in direct_nodes %}
+          <option value="{{ item['node_id'] }}" {% if form_values.get('backend_node_id') == item['node_id'] %}selected{% endif %}>{{ item['name'] }} · {{ item['ip'] }}:{{ item['public_port'] }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <div class="full-span">
+        <div class="field-note">链式节点不填写端口：沿用前置节点的现有公网入口，后续由部署逻辑写入链式专用用户与路由规则。</div>
+      </div>
+      <input type="hidden" name="chain_mode" value="{{ chain_mode }}">
+      <input type="hidden" name="public_port" value="">
+      <input type="hidden" name="listen_port" value="">
+      {% else %}
       <label>
         <span>NAT IP</span>
         <input type="text" name="ip" value="{{ form_values['ip'] }}" required>
@@ -45,6 +87,7 @@
         <span>SSH 密码</span>
         <input type="text" name="ssh_password" value="{{ form_values['ssh_password'] }}" required>
       </label>
+
       <label>
         <span>公网端口</span>
         <input type="number" name="public_port" value="{{ form_values['public_port'] }}" min="1" max="65535" required>
@@ -53,10 +96,22 @@
         <span>内网监听端口</span>
         <input type="number" name="listen_port" value="{{ form_values['listen_port'] }}" min="1" max="65535" required>
       </label>
+      <label>
+        <span>地区代码覆盖</span>
+        <input type="text" name="manual_country_code" value="{{ form_values.get('manual_country_code', '') }}" maxlength="2" placeholder="JP / HK / US">
+      </label>
+      <label>
+        <span>地区显示名</span>
+        <input type="text" name="manual_region_label" value="{{ form_values.get('manual_region_label', '') }}" placeholder="日本 / 香港 / 美国">
+      </label>
+      <div class="full-span">
+        <div class="field-note">留空则自动按 IP 识别；手动填写后优先使用手动值，不会被自动识别覆盖。</div>
+      </div>
+      {% endif %}
     </div>
 
     <div class="form-footer">
-      <button type="submit">{% if mode == 'edit' %}保存修改{% else %}创建节点{% endif %}</button>
+      <button type="submit">{% if mode == 'edit' %}保存修改{% else %}{% if is_chain_form %}创建链式节点{% else %}创建节点{% endif %}{% endif %}</button>
     </div>
   </form>
 </section>

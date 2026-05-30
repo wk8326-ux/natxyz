@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import base64
 import json
+import sqlite3
+import urllib.parse
+import uuid
 from datetime import datetime, timedelta, timezone
 
+import yaml
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -11,12 +15,15 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from .auth import login_required, verify_login
+from .chain_deployer import apply_front_chain_config
 from .config import AGENT_REPORT_PATH, APP_DIR, APP_NAME, SESSION_COOKIE, SESSION_SECRET, STATUS_STALE_MINUTES
 from .db import (
+    DB_PATH,
     create_demo_node,
     create_deployment_record,
     create_node_record,
     delete_node_record,
+    delete_tag,
     find_node_by_endpoint,
     get_deployment,
     get_node,
@@ -24,9 +31,15 @@ from .db import (
     ingest_agent_report,
     init_db,
     list_deployments_for_node,
+    list_direct_vless_nodes,
+    list_node_tag_ids,
+    list_node_tags_map,
     list_nodes,
     list_subscribable_nodes,
+    list_tags,
     mark_node_deployed_from_report,
+    set_node_tags,
+    create_tag,
     update_node_record,
     validate_subscription_token,
 )
@@ -117,18 +130,132 @@ REQUIRED_FIELDS = [
     "public_port",
     "listen_port",
 ]
+TAG_COLORS = ["#4c8dff", "#2ccf8f", "#f0b84b", "#ff6b7a", "#a78bfa", "#22d3ee", "#fb7185", "#94a3b8"]
+CHAIN_MODE = "vless_reality_to_vless_reality"
+PROTOCOL_DIRECT = "vless_reality_singbox"
+PROTOCOL_CHAIN = "vless_chain"
 
 
 
-def clean_node_form(form: dict[str, str]) -> tuple[dict[str, object], list[str]]:
+def is_chain_protocol(protocol_type: object) -> bool:
+    return str(protocol_type or "") == PROTOCOL_CHAIN
+
+
+
+def node_to_form_values(node) -> dict[str, object]:
+    return {
+        "name": node["name"],
+        "ip": node["ip"],
+        "ssh_port": node["ssh_port"],
+        "ssh_user": node["ssh_user"],
+        "ssh_password": node["ssh_password"],
+        "public_port": node["public_port"],
+        "listen_port": node["listen_port"],
+        "protocol_type": node["protocol_type"],
+        "front_node_id": node["front_node_id"],
+        "backend_node_id": node["backend_node_id"],
+        "chain_mode": node["chain_mode"],
+        "manual_country_code": node["manual_country_code"] or "",
+        "manual_region_label": node["manual_region_label"] or "",
+    }
+
+
+
+def default_form_values() -> dict[str, object]:
+    return {
+        "name": "",
+        "ip": "",
+        "ssh_port": 22,
+        "ssh_user": "root",
+        "ssh_password": "",
+        "public_port": "",
+        "listen_port": "",
+        "protocol_type": PROTOCOL_DIRECT,
+        "front_node_id": "",
+        "backend_node_id": "",
+        "chain_mode": CHAIN_MODE,
+        "manual_country_code": "",
+        "manual_region_label": "",
+    }
+
+
+
+def apply_chain_endpoint_defaults(cleaned: dict[str, object], front_node) -> None:
+    cleaned["ip"] = front_node["ip"]
+    cleaned["ssh_port"] = front_node["ssh_port"]
+    cleaned["ssh_user"] = front_node["ssh_user"]
+    cleaned["ssh_password"] = front_node["ssh_password"]
+    if not str(cleaned.get("public_port") or "").strip():
+        cleaned["public_port"] = front_node["public_port"]
+    if not str(cleaned.get("listen_port") or "").strip():
+        cleaned["listen_port"] = front_node["listen_port"]
+
+
+
+def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None) -> tuple[dict[str, object], list[str]]:
     errors: list[str] = []
     cleaned: dict[str, object] = {}
+    protocol_type = str(form.get("protocol_type") or PROTOCOL_DIRECT).strip() or PROTOCOL_DIRECT
+    if protocol_type not in {PROTOCOL_DIRECT, PROTOCOL_CHAIN}:
+        errors.append("protocol_type 不支持")
+        protocol_type = PROTOCOL_DIRECT
+    cleaned["protocol_type"] = protocol_type
 
-    for key in REQUIRED_FIELDS:
+    required_fields = list(REQUIRED_FIELDS)
+    if is_chain_protocol(protocol_type):
+        for optional_key in ["ip", "ssh_port", "ssh_user", "ssh_password", "public_port", "listen_port"]:
+            if optional_key in required_fields:
+                required_fields.remove(optional_key)
+
+    for key in required_fields:
         value = str(form.get(key, "")).strip()
         if not value:
             errors.append(f"{key} 不能为空")
         cleaned[key] = value
+
+    for key in REQUIRED_FIELDS:
+        cleaned.setdefault(key, str(form.get(key, "")).strip())
+
+    cleaned["front_node_id"] = str(form.get("front_node_id") or "").strip()
+    cleaned["backend_node_id"] = str(form.get("backend_node_id") or "").strip()
+    cleaned["chain_mode"] = CHAIN_MODE if is_chain_protocol(protocol_type) else None
+    manual_country_code = str(form.get("manual_country_code") or "").strip().upper()
+    manual_region_label = str(form.get("manual_region_label") or "").strip()
+    if manual_country_code and (len(manual_country_code) != 2 or not manual_country_code.isalpha()):
+        errors.append("国家/地区代码请填写两位字母，例如 JP / HK / US")
+    cleaned["manual_country_code"] = manual_country_code or None
+    cleaned["manual_region_label"] = manual_region_label or None
+
+    if is_chain_protocol(protocol_type):
+        front_node_id = str(cleaned["front_node_id"] or "")
+        backend_node_id = str(cleaned["backend_node_id"] or "")
+        if not front_node_id:
+            errors.append("front_node_id 不能为空")
+        if not backend_node_id:
+            errors.append("backend_node_id 不能为空")
+        if front_node_id and backend_node_id and front_node_id == backend_node_id:
+            errors.append("前置节点和后端节点不能相同")
+
+        front_node = get_node(front_node_id) if front_node_id else None
+        backend_node = get_node(backend_node_id) if backend_node_id else None
+        if front_node_id and not front_node:
+            errors.append("前置节点不存在")
+        if backend_node_id and not backend_node:
+            errors.append("后端节点不存在")
+        if front_node and front_node["protocol_type"] != PROTOCOL_DIRECT:
+            errors.append("前置节点必须是 VLESS + Reality 直连节点")
+        if backend_node and backend_node["protocol_type"] != PROTOCOL_DIRECT:
+            errors.append("后端节点必须是 VLESS + Reality 直连节点")
+        if front_node and editing_node_id and front_node["node_id"] == editing_node_id:
+            errors.append("链式节点不能选择自己作为前置节点")
+        if backend_node and editing_node_id and backend_node["node_id"] == editing_node_id:
+            errors.append("链式节点不能选择自己作为后端节点")
+        if front_node:
+            apply_chain_endpoint_defaults(cleaned, front_node)
+    else:
+        cleaned["front_node_id"] = None
+        cleaned["backend_node_id"] = None
+        cleaned["chain_mode"] = None
 
     for int_key in ["ssh_port", "public_port", "listen_port"]:
         value = str(cleaned.get(int_key, ""))
@@ -146,6 +273,62 @@ def clean_node_form(form: dict[str, str]) -> tuple[dict[str, object], list[str]]
 
 
 
+def protocol_label(protocol_type: object) -> str:
+    mapping = {
+        PROTOCOL_DIRECT: "vless",
+        PROTOCOL_CHAIN: "vless",
+        "hy2": "hy2",
+        "hysteria2": "hy2",
+    }
+    return mapping.get(str(protocol_type or ""), str(protocol_type or "-"))
+
+
+def country_code_to_flag(country_code: str) -> str:
+    code = country_code.strip().upper()
+    if len(code) != 2 or not code.isalpha():
+        return ""
+    return "".join(chr(127397 + ord(ch)) for ch in code)
+
+
+COUNTRY_NAME_MAP = {
+    "HK": "香港",
+    "JP": "日本",
+    "KR": "韩国",
+    "US": "美国",
+    "TW": "台湾",
+    "SG": "新加坡",
+    "TR": "土耳其",
+    "AU": "澳洲",
+    "CN": "中国",
+}
+
+
+def manual_region_from_node(node) -> dict[str, str] | None:
+    code = str(node["manual_country_code"] or "").strip().upper() if "manual_country_code" in node.keys() else ""
+    label = str(node["manual_region_label"] or "").strip() if "manual_region_label" in node.keys() else ""
+    if not code and not label:
+        return None
+    return {"flag": country_code_to_flag(code) if code else "📍", "label": label or COUNTRY_NAME_MAP.get(code, code)}
+
+
+def lookup_ip_region(ip: str) -> dict[str, str]:
+    ip = str(ip or "").strip()
+    if not ip:
+        return {"flag": "", "label": ""}
+    try:
+        import urllib.request
+        with urllib.request.urlopen(f"http://ip-api.com/json/{urllib.parse.quote(ip)}?fields=status,countryCode,country,regionName", timeout=1.6) as resp:
+            data = json.loads(resp.read().decode("utf-8", "ignore"))
+        if data.get("status") == "success" and data.get("countryCode"):
+            code = str(data.get("countryCode") or "").upper()
+            region = str(data.get("regionName") or "").strip()
+            country = COUNTRY_NAME_MAP.get(code, str(data.get("country") or code))
+            return {"flag": country_code_to_flag(code), "label": f"{country} {region}".strip()}
+    except Exception:
+        pass
+    return {"flag": "🌐", "label": ip}
+
+
 def render_node_form(
     request: Request,
     *,
@@ -154,7 +337,9 @@ def render_node_form(
     form_values: dict[str, object],
     errors: list[str] | None = None,
     node_id: str | None = None,
+    form_kind: str = "direct",
 ):
+    direct_nodes = [node for node in list_direct_vless_nodes() if node["node_id"] != node_id]
     return templates.TemplateResponse(
         request,
         "node-form.html",
@@ -165,6 +350,12 @@ def render_node_form(
             "form_values": form_values,
             "errors": errors or [],
             "node_id": node_id,
+            "direct_nodes": direct_nodes,
+            "protocol_direct": PROTOCOL_DIRECT,
+            "protocol_chain": PROTOCOL_CHAIN,
+            "chain_mode": CHAIN_MODE,
+            "form_kind": form_kind,
+            "is_chain_form": form_kind == "chain" or form_values.get("protocol_type") == PROTOCOL_CHAIN,
         },
     )
 
@@ -184,12 +375,31 @@ def compute_badge(node) -> tuple[str, str]:
             return "offline", "离线"
     mapping = {
         "online": ("online", "在线"),
+        "deployed": ("online", "在线"),
         "offline": ("offline", "离线"),
+        "failed": ("failed", "部署失败"),
         "deploy_failed": ("failed", "部署失败"),
         "never_deployed": ("pending", "未部署"),
         "deploying": ("pending", "部署中"),
     }
     return mapping.get(status, ("pending", status))
+
+
+def compute_effective_badge(node, node_by_id: dict[str, object] | None = None) -> tuple[str, str]:
+    own_badge = compute_badge(node)
+    if node["protocol_type"] != PROTOCOL_CHAIN:
+        return own_badge
+    if own_badge[0] in {"pending", "failed"}:
+        return own_badge
+    if not node_by_id:
+        return own_badge
+    front = node_by_id.get(node["front_node_id"])
+    backend = node_by_id.get(node["backend_node_id"])
+    if not front or not backend:
+        return "offline", "离线"
+    if compute_badge(front)[0] != "online" or compute_badge(backend)[0] != "online":
+        return "offline", "离线"
+    return "online", "在线"
 
 
 
@@ -218,6 +428,11 @@ def build_subscription_url(request: Request) -> str:
     return str(request.url_for("subscription_feed", token=token))
 
 
+def build_clash_subscription_url(request: Request) -> str:
+    token = get_or_create_subscription_token()
+    return str(request.url_for("clash_subscription_feed", token=token))
+
+
 
 def build_subscription_payload() -> str:
     links = []
@@ -229,25 +444,124 @@ def build_subscription_payload() -> str:
     return base64.b64encode(plain.encode("utf-8")).decode("ascii")
 
 
+def _query_first(query: dict[str, list[str]], key: str, default: str = "") -> str:
+    values = query.get(key) or []
+    return values[0] if values else default
+
+
+def _vless_link_to_clash_proxy(link: str) -> dict[str, object] | None:
+    try:
+        parsed = urllib.parse.urlparse(link)
+    except ValueError:
+        return None
+    if parsed.scheme != "vless" or not parsed.hostname or not parsed.username:
+        return None
+    query = urllib.parse.parse_qs(parsed.query)
+    name = urllib.parse.unquote(parsed.fragment or parsed.hostname)
+    sni = _query_first(query, "sni") or _query_first(query, "peer")
+    public_key = _query_first(query, "pbk")
+    short_id = _query_first(query, "sid")
+    proxy: dict[str, object] = {
+        "name": name,
+        "type": "vless",
+        "server": parsed.hostname,
+        "port": parsed.port or 443,
+        "uuid": urllib.parse.unquote(parsed.username),
+        "network": _query_first(query, "type", "tcp") or "tcp",
+        "udp": True,
+        "tls": True,
+        "servername": sni,
+        "flow": _query_first(query, "flow", "xtls-rprx-vision") or "xtls-rprx-vision",
+        "client-fingerprint": _query_first(query, "fp", "chrome") or "chrome",
+        "reality-opts": {
+            "public-key": public_key,
+            "short-id": short_id,
+        },
+    }
+    if _query_first(query, "spx"):
+        proxy["reality-opts"]["spider-x"] = _query_first(query, "spx")  # type: ignore[index]
+    return proxy
+
+
+def build_clash_subscription_payload() -> str:
+    proxies = []
+    seen_names: set[str] = set()
+    for node in list_subscribable_nodes():
+        link = (node["last_vless_link"] or "").strip()
+        if not link:
+            continue
+        proxy = _vless_link_to_clash_proxy(link)
+        if not proxy:
+            continue
+        base_name = str(proxy["name"])
+        name = base_name
+        idx = 2
+        while name in seen_names:
+            name = f"{base_name}-{idx}"
+            idx += 1
+        proxy["name"] = name
+        seen_names.add(name)
+        proxies.append(proxy)
+    names = [str(p["name"]) for p in proxies]
+    payload = {
+        "proxies": proxies,
+        "proxy-groups": [
+            {
+                "name": "NAT-WebUI",
+                "type": "select",
+                "proxies": names + ["DIRECT"],
+            }
+        ],
+        "rules": ["MATCH,NAT-WebUI"],
+    }
+    return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
+
+
 
 @app.get("/nodes", response_class=HTMLResponse)
 @login_required
 async def nodes_page(request: Request):
     raw_nodes = list_nodes()
+    node_by_id = {node["node_id"]: node for node in raw_nodes}
+    tag_map = list_node_tags_map()
+    region_cache: dict[str, dict[str, str]] = {}
     nodes = []
     for node in raw_nodes:
-        badge_class, badge_text = compute_badge(node)
+        badge_class, badge_text = compute_effective_badge(node, node_by_id)
+        if node["protocol_type"] == PROTOCOL_CHAIN:
+            front = node_by_id.get(node["front_node_id"])
+            backend = node_by_id.get(node["backend_node_id"])
+            front_region = manual_region_from_node(front) if front else None
+            if not front_region:
+                front_region = region_cache.setdefault(f"node:{node['front_node_id']}", lookup_ip_region(front["ip"] if front else ""))
+            backend_region = manual_region_from_node(backend) if backend else None
+            if not backend_region:
+                backend_region = region_cache.setdefault(f"node:{node['backend_node_id']}", lookup_ip_region(backend["ip"] if backend else ""))
+            region = {"flag": f"{front_region.get('flag', '')}{backend_region.get('flag', '')}", "label": "链式节点"}
+        else:
+            manual_region = manual_region_from_node(node)
+            region = manual_region or region_cache.setdefault(node["ip"], lookup_ip_region(node["ip"]))
         nodes.append({
             "node_id": node["node_id"],
             "name": node["name"],
             "ip": node["ip"],
             "protocol_type": node["protocol_type"],
+            "protocol_label": protocol_label(node["protocol_type"]),
+            "region_flag": region.get("flag", ""),
+            "region_label": region.get("label", ""),
+            "front_node_id": node["front_node_id"],
+            "backend_node_id": node["backend_node_id"],
+            "front_node_name": node["front_node_name"],
+            "backend_node_name": node["backend_node_name"],
             "badge_class": badge_class,
             "badge_text": badge_text,
             "last_vless_link": node["last_vless_link"] or "",
+            "tags": tag_map.get(node["node_id"], []),
             "can_reinstall": True,
+            "is_chain": bool(node["protocol_type"] == PROTOCOL_CHAIN),
         })
     subscription_url = build_subscription_url(request)
+    clash_subscription_url = build_clash_subscription_url(request)
     return templates.TemplateResponse(
         request,
         "nodes.html",
@@ -256,6 +570,9 @@ async def nodes_page(request: Request):
             "title": "节点列表",
             "nodes": nodes,
             "subscription_url": subscription_url,
+            "clash_subscription_url": clash_subscription_url,
+            "tags": list_tags(),
+            "tag_colors": TAG_COLORS,
         },
     )
 
@@ -275,22 +592,46 @@ async def subscription_feed(token: str):
     )
 
 
+@app.get("/sub/{token}/clash", response_class=PlainTextResponse, name="clash_subscription_feed")
+async def clash_subscription_feed(token: str):
+    if not validate_subscription_token(token):
+        return PlainTextResponse("forbidden", status_code=403)
+    payload = build_clash_subscription_payload()
+    return PlainTextResponse(
+        payload,
+        media_type="text/yaml; charset=utf-8",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": 'inline; filename="nat-clash.yaml"',
+        },
+    )
+
+
 @app.get("/nodes/new", response_class=HTMLResponse)
 @login_required
 async def node_create_page(request: Request):
+    values = default_form_values()
+    values["protocol_type"] = PROTOCOL_DIRECT
     return render_node_form(
         request,
-        title="新建节点",
+        title="新建 VLESS 单节点",
         mode="create",
-        form_values={
-            "name": "",
-            "ip": "",
-            "ssh_port": 22,
-            "ssh_user": "root",
-            "ssh_password": "",
-            "public_port": "",
-            "listen_port": "",
-        },
+        form_values=values,
+        form_kind="direct",
+    )
+
+
+@app.get("/nodes/new-chain", response_class=HTMLResponse)
+@login_required
+async def chain_node_create_page(request: Request):
+    values = default_form_values()
+    values["protocol_type"] = PROTOCOL_CHAIN
+    return render_node_form(
+        request,
+        title="新建链式节点",
+        mode="create",
+        form_values=values,
+        form_kind="chain",
     )
 
 
@@ -305,6 +646,11 @@ async def node_create_submit(
     ssh_password: str = Form(...),
     public_port: str = Form(...),
     listen_port: str = Form(...),
+    protocol_type: str = Form(PROTOCOL_DIRECT),
+    front_node_id: str = Form(""),
+    backend_node_id: str = Form(""),
+    manual_country_code: str = Form(""),
+    manual_region_label: str = Form(""),
 ):
     payload, errors = clean_node_form(
         {
@@ -315,25 +661,184 @@ async def node_create_submit(
             "ssh_password": ssh_password,
             "public_port": public_port,
             "listen_port": listen_port,
+            "protocol_type": protocol_type,
+            "front_node_id": front_node_id,
+            "backend_node_id": backend_node_id,
+            "manual_country_code": manual_country_code,
+            "manual_region_label": manual_region_label,
         }
     )
 
     if not errors:
         exists = find_node_by_endpoint(str(payload["ip"]), int(payload["ssh_port"]))
-        if exists:
+        if exists and not is_chain_protocol(payload.get("protocol_type")):
             errors.append("已存在相同 IP + SSH 端口 的节点记录")
 
     if errors:
         return render_node_form(
             request,
-            title="新建节点",
+            title="新建链式节点" if is_chain_protocol(payload.get("protocol_type")) else "新建 VLESS 单节点",
             mode="create",
             form_values=payload,
             errors=errors,
+            form_kind="chain" if is_chain_protocol(payload.get("protocol_type")) else "direct",
         )
 
     node_id = create_node_record(payload)
     return RedirectResponse(url=f"/nodes/{node_id}", status_code=303)
+
+
+@app.post("/nodes/new-chain", response_class=HTMLResponse)
+@login_required
+async def chain_node_create_submit(
+    request: Request,
+    name: str = Form(...),
+    front_node_id: str = Form(""),
+    backend_node_id: str = Form(""),
+    public_port: str = Form(""),
+    listen_port: str = Form(""),
+):
+    payload, errors = clean_node_form(
+        {
+            "name": name,
+            "ip": "",
+            "ssh_port": "",
+            "ssh_user": "",
+            "ssh_password": "",
+            "public_port": public_port,
+            "listen_port": listen_port,
+            "protocol_type": PROTOCOL_CHAIN,
+            "front_node_id": front_node_id,
+            "backend_node_id": backend_node_id,
+        }
+    )
+
+    if errors:
+        return render_node_form(
+            request,
+            title="新建链式节点",
+            mode="create",
+            form_values=payload,
+            errors=errors,
+            form_kind="chain",
+        )
+
+    node_id = create_node_record(payload)
+    return RedirectResponse(url=f"/nodes/{node_id}", status_code=303)
+
+
+def build_chain_link(chain_node: dict[str, object], front_node: dict[str, object], backend_node: dict[str, object], chain_uuid: str) -> str:
+    raw_backend_name = str(backend_node.get("name") or "backend")
+    label = f"{chain_node.get('name') or 'chain'} via {front_node.get('name') or 'front'} -> {raw_backend_name}"
+    params = {
+        "encryption": "none",
+        "flow": "xtls-rprx-vision",
+        "security": "reality",
+        "sni": front_node.get("selected_reality_target") or "www.microsoft.com",
+        "fp": "chrome",
+        "pbk": front_node.get("generated_public_key") or "",
+        "sid": front_node.get("generated_short_id") or "",
+        "type": "tcp",
+        "headerType": "none",
+    }
+    query = urllib.parse.urlencode(params)
+    return f"vless://{chain_uuid}@{front_node['ip']}:{front_node['public_port']}?{query}#{urllib.parse.quote(label)}"
+
+
+def generate_chain_deployment(chain_node_id: str) -> tuple[str, str, str, dict[str, object]]:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        chain = conn.execute("SELECT * FROM nodes WHERE node_id = ?", (chain_node_id,)).fetchone()
+        if not chain:
+            raise ValueError("链式节点不存在")
+        if chain["protocol_type"] != PROTOCOL_CHAIN:
+            raise ValueError("不是链式节点")
+        front = conn.execute("SELECT * FROM nodes WHERE node_id = ?", (chain["front_node_id"],)).fetchone()
+        backend = conn.execute("SELECT * FROM nodes WHERE node_id = ?", (chain["backend_node_id"],)).fetchone()
+        if not front or not backend:
+            raise ValueError("前置节点或后端节点不存在")
+        if not front["last_vless_link"] or not front["generated_public_key"] or not front["generated_short_id"]:
+            raise ValueError("前置节点还没有成功部署链接，不能生成链式入口")
+        if not backend["last_vless_link"] or not backend["generated_public_key"] or not backend["generated_short_id"]:
+            raise ValueError("后端节点还没有成功部署链接，不能生成链式节点")
+
+        chain_uuid = chain["generated_uuid"] or str(uuid.uuid4())
+        link = build_chain_link(dict(chain), dict(front), dict(backend), chain_uuid)
+        ts = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+            UPDATE nodes
+            SET ip = ?, ssh_port = ?, ssh_user = ?, ssh_password = ?,
+                public_port = ?, listen_port = ?, generated_uuid = ?,
+                selected_reality_target = ?, generated_public_key = ?, generated_short_id = ?,
+                last_vless_link = ?, status = ?, updated_at = ?
+            WHERE node_id = ?
+            """,
+            (
+                front["ip"],
+                front["ssh_port"],
+                front["ssh_user"],
+                front["ssh_password"],
+                front["public_port"],
+                front["listen_port"],
+                chain_uuid,
+                front["selected_reality_target"],
+                front["generated_public_key"],
+                front["generated_short_id"],
+                link,
+                "deployed",
+                ts,
+                chain_node_id,
+            ),
+        )
+        chain_tag = f"chain-{chain_node_id}"
+        apply_log = apply_front_chain_config(dict(front), dict(backend), chain_tag=chain_tag, chain_uuid=chain_uuid)
+        summary = f"链式节点已真实下发：前置 {front['name']} 入口 {front['ip']}:{front['public_port']}，按链式用户路由到后端 {backend['name']}。"
+        raw = "\n".join(
+            [
+                "[stage] chain-route-apply",
+                f"front_node={front['name']} {front['ip']}:{front['public_port']}",
+                f"backend_node={backend['name']} {backend['ip']}:{backend['public_port']}",
+                f"chain_tag={chain_tag}",
+                f"chain_uuid={chain_uuid}",
+                apply_log,
+            ]
+        )
+        return summary, raw, link, {"chain_uuid": chain_uuid, "chain_tag": chain_tag}
+
+
+def mark_chain_deployment_success(deploy_id: str, summary: str, raw: str, link: str) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        deployment = conn.execute("SELECT node_id FROM deployments WHERE deploy_id = ?", (deploy_id,)).fetchone()
+        if not deployment:
+            return
+        ts = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+            UPDATE deployments
+            SET ended_at = ?, result = ?, failure_stage = ?, summary_log = ?, raw_log = ?, generated_vless_link = ?
+            WHERE deploy_id = ?
+            """,
+            (ts, "success", None, summary, raw, link, deploy_id),
+        )
+        conn.execute("UPDATE nodes SET status = ?, updated_at = ? WHERE node_id = ?", ("deployed", ts, deployment[0]))
+
+
+def mark_chain_deployment_failed(deploy_id: str, message: str) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        deployment = conn.execute("SELECT node_id FROM deployments WHERE deploy_id = ?", (deploy_id,)).fetchone()
+        if not deployment:
+            return
+        ts = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+            UPDATE deployments
+            SET ended_at = ?, result = ?, failure_stage = ?, summary_log = ?, raw_log = ?
+            WHERE deploy_id = ?
+            """,
+            (ts, "failed", "chain_generate", message, f"[error] {message}", deploy_id),
+        )
+        conn.execute("UPDATE nodes SET status = ?, updated_at = ? WHERE node_id = ?", ("failed", ts, deployment[0]))
 
 
 @app.get("/nodes/{node_id}", response_class=HTMLResponse)
@@ -349,7 +854,9 @@ async def node_detail_page(request: Request, node_id: str):
         )
 
     deployments = list_deployments_for_node(node_id)
-    badge_class, badge_text = compute_badge(node)
+    raw_nodes = list_nodes()
+    node_by_id = {item["node_id"]: item for item in raw_nodes}
+    badge_class, badge_text = compute_effective_badge(node, node_by_id)
     report = None
     if node["last_report_json"]:
         try:
@@ -371,6 +878,9 @@ async def node_detail_page(request: Request, node_id: str):
             "badge_text": badge_text,
             "report": report,
             "latest_deploy_id": latest_deploy_id,
+            "is_chain": bool(node["protocol_type"] == PROTOCOL_CHAIN),
+            "protocol_label": protocol_label(node["protocol_type"]),
+            "node_tags": tag_map.get(node_id, []) if (tag_map := list_node_tags_map()) else [],
         },
     )
 
@@ -392,15 +902,8 @@ async def node_edit_page(request: Request, node_id: str):
         title=f"编辑节点 · {node['name']}",
         mode="edit",
         node_id=node_id,
-        form_values={
-            "name": node["name"],
-            "ip": node["ip"],
-            "ssh_port": node["ssh_port"],
-            "ssh_user": node["ssh_user"],
-            "ssh_password": node["ssh_password"],
-            "public_port": node["public_port"],
-            "listen_port": node["listen_port"],
-        },
+        form_values=node_to_form_values(node),
+        form_kind="chain" if node["protocol_type"] == PROTOCOL_CHAIN else "direct",
     )
 
 
@@ -416,6 +919,11 @@ async def node_edit_submit(
     ssh_password: str = Form(...),
     public_port: str = Form(...),
     listen_port: str = Form(...),
+    protocol_type: str = Form(PROTOCOL_DIRECT),
+    front_node_id: str = Form(""),
+    backend_node_id: str = Form(""),
+    manual_country_code: str = Form(""),
+    manual_region_label: str = Form(""),
 ):
     node = get_node(node_id)
     if not node:
@@ -435,7 +943,13 @@ async def node_edit_submit(
             "ssh_password": ssh_password,
             "public_port": public_port,
             "listen_port": listen_port,
-        }
+            "protocol_type": protocol_type,
+            "front_node_id": front_node_id,
+            "backend_node_id": backend_node_id,
+            "manual_country_code": manual_country_code,
+            "manual_region_label": manual_region_label,
+        },
+        editing_node_id=node_id,
     )
 
     if not errors:
@@ -444,7 +958,7 @@ async def node_edit_submit(
             int(payload["ssh_port"]),
             exclude_node_id=node_id,
         )
-        if exists:
+        if exists and not is_chain_protocol(payload.get("protocol_type")):
             errors.append("已存在相同 IP + SSH 端口 的节点记录")
 
     if errors:
@@ -455,10 +969,39 @@ async def node_edit_submit(
             node_id=node_id,
             form_values=payload,
             errors=errors,
+            form_kind="chain" if is_chain_protocol(payload.get("protocol_type")) else "direct",
         )
 
     update_node_record(node_id, payload)
     return RedirectResponse(url=f"/nodes/{node_id}", status_code=303)
+
+
+@app.post("/tags")
+@login_required
+async def tag_create_submit(request: Request, name: str = Form(...), color: str = Form(TAG_COLORS[0])):
+    name = name.strip()
+    color = color.strip() or TAG_COLORS[0]
+    if name:
+        try:
+            create_tag(name, color)
+        except Exception:
+            pass
+    return RedirectResponse(url="/nodes", status_code=303)
+
+
+@app.post("/tags/{tag_id}/delete")
+@login_required
+async def tag_delete_submit(request: Request, tag_id: str):
+    delete_tag(tag_id)
+    return RedirectResponse(url="/nodes", status_code=303)
+
+
+@app.post("/nodes/{node_id}/tags")
+@login_required
+async def node_tags_submit(request: Request, node_id: str, tag_ids: list[str] = Form([])):
+    if get_node(node_id):
+        set_node_tags(node_id, tag_ids)
+    return RedirectResponse(url="/nodes", status_code=303)
 
 
 @app.post("/nodes/{node_id}/reinstall")
@@ -473,7 +1016,15 @@ async def node_reinstall_submit(request: Request, node_id: str):
             status_code=404,
         )
 
-    deploy_id = create_deployment_record(node_id=node_id, action_type="reinstall")
+    deploy_id = create_deployment_record(node_id=node_id, action_type="chain_generate" if node["protocol_type"] == PROTOCOL_CHAIN else "reinstall")
+    if node["protocol_type"] == PROTOCOL_CHAIN:
+        try:
+            summary, raw, link, _meta = generate_chain_deployment(node_id)
+            mark_chain_deployment_success(deploy_id, summary, raw, link)
+        except ValueError as exc:
+            mark_chain_deployment_failed(deploy_id, str(exc))
+        return RedirectResponse(url=f"/deployments/{deploy_id}", status_code=303)
+
     submit_reinstall_job(deploy_id=deploy_id, node=dict(node))
     return RedirectResponse(url=f"/deployments/{deploy_id}", status_code=303)
 

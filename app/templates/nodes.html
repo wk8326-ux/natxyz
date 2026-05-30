@@ -5,13 +5,46 @@
   <div class="panel-head">
       <div>
         <div class="panel-title">节点列表</div>
-        <div class="panel-subtitle">当前已打通登录、列表、详情、新建、编辑、删除。支持一键复制订阅 URL，客户端更新即可同步最新节点。</div>
+        <div class="panel-subtitle">支持直连节点和链式节点；链式节点以“前置入口 → 后端落地”作为独立记录管理。</div>
       </div>
 
     <div class="panel-actions">
-      <button class="ghost-btn" type="button" onclick='copyText({{ subscription_url | tojson }}, this)'>一键订阅</button>
+      <button class="icon-btn sub-brand-icon" type="button" title="复制 v2rayN 订阅 URL" aria-label="复制 v2rayN 订阅 URL" onclick='copyText({{ subscription_url | tojson }}, this)'><img src="/static/icons/v2rayn.png" alt="" aria-hidden="true"></button>
+      <button class="icon-btn sub-brand-icon" type="button" title="复制 Clash 订阅 URL" aria-label="复制 Clash 订阅 URL" onclick='copyText({{ clash_subscription_url | tojson }}, this)'><img src="/static/icons/clash.png" alt="" aria-hidden="true"></button>
+      <a class="ghost-btn link-plain" href="/nodes/new-chain">新建链式节点</a>
       <a class="link-btn" href="/nodes/new">新建节点</a>
     </div>
+  </div>
+
+  <div class="tag-toolbar">
+    <details class="tag-add-popover">
+      <summary class="small-btn">+ 标签</summary>
+      <form class="tag-create-form" method="post" action="/tags">
+        <input type="text" name="name" placeholder="落地 / 线路 / CN2" maxlength="20">
+        <div class="color-dots">
+          {% for color in tag_colors %}
+            <label class="color-dot" style="--tag-color: {{ color }}" title="{{ color }}">
+              <input type="radio" name="color" value="{{ color }}" {% if loop.first %}checked{% endif %}>
+              <span></span>
+            </label>
+          {% endfor %}
+        </div>
+        <button class="small-btn primary-small" type="submit">添加</button>
+      </form>
+    </details>
+
+    {% if tags %}
+    <div class="tag-manager">
+      {% for tag in tags %}
+        <form method="post" action="/tags/{{ tag.tag_id }}/delete" onsubmit="return confirm('删除标签 {{ tag.name }}？');">
+          <span class="tag-chip" style="--tag-color: {{ tag.color }}">{{ tag.name }}</span>
+          <button class="tag-delete" type="submit" title="删除标签">×</button>
+        </form>
+      {% endfor %}
+    </div>
+    {% else %}
+    <span class="muted-small">暂无标签</span>
+    {% endif %}
   </div>
 
   {% if nodes %}
@@ -20,28 +53,70 @@
       <thead>
         <tr>
           <th>节点名</th>
-          <th>IP</th>
+          <th>入口 / IP</th>
+          <th>地区</th>
           <th>协议</th>
           <th>状态</th>
+          <th>标签</th>
           <th>操作</th>
         </tr>
       </thead>
       <tbody>
         {% for node in nodes %}
         <tr>
-          <td>{{ node.name }}</td>
-          <td>{{ node.ip }}</td>
-          <td>{{ node.protocol_type }}</td>
+          <td>
+            <div class="node-name-cell">
+              <span>{{ node.name }}</span>
+              {% if node.get('is_chain') %}
+              <span class="node-kind-icon" title="链式节点" aria-label="链式节点">⛓</span>
+              {% endif %}
+            </div>
+          </td>
+          <td>
+            {% if node.get('is_chain') %}
+            {{ node.front_node_name or node.front_node_id }} → {{ node.backend_node_name or node.backend_node_id }}
+            {% else %}
+            {{ node.ip }}
+            {% endif %}
+          </td>
+          <td><span class="flag-cell" title="{{ node.region_label }}">{{ node.region_flag or '—' }}</span></td>
+          <td><span class="badge proto">{{ node.protocol_label }}</span></td>
           <td><span class="badge {{ node.badge_class }}">{{ node.badge_text }}</span></td>
           <td>
+            <div class="tag-stack">
+              <div class="node-tags">
+                {% for tag in node.tags %}
+                  <span class="tag-chip" style="--tag-color: {{ tag.color }}">{{ tag.name }}</span>
+                {% else %}
+                  <span class="muted-small">—</span>
+                {% endfor %}
+              </div>
+              <details class="tag-picker">
+                <summary title="选择标签" aria-label="选择标签">＋</summary>
+                <form method="post" action="/nodes/{{ node.node_id }}/tags">
+                  {% set selected_tag_ids = node.tags | map(attribute='tag_id') | list %}
+                  {% for tag in tags %}
+                    <label class="tag-option">
+                      <input type="checkbox" name="tag_ids" value="{{ tag.tag_id }}" {% if tag.tag_id in selected_tag_ids %}checked{% endif %}>
+                      <span class="tag-chip" style="--tag-color: {{ tag.color }}">{{ tag.name }}</span>
+                    </label>
+                  {% else %}
+                    <span class="muted-small">先添加标签</span>
+                  {% endfor %}
+                  <button class="small-btn tag-save-btn" type="submit" title="保存标签" aria-label="保存标签">💾</button>
+                </form>
+              </details>
+            </div>
+          </td>
+          <td>
             <div class="inline-actions">
-              <button class="ghost-btn" type="button" onclick='copyText({{ node.last_vless_link | tojson }}, this)' {% if not node.last_vless_link %}disabled{% endif %}>复制链接</button>
-              <a class="ghost-btn link-plain" href="/nodes/{{ node.node_id }}">查看详情</a>
+              <button class="icon-btn" type="button" title="复制链接" aria-label="复制链接" onclick='copyText({{ node.last_vless_link | tojson }}, this)' {% if not node.last_vless_link %}disabled{% endif %}>⧉</button>
+              <a class="icon-btn link-plain" href="/nodes/{{ node.node_id }}" title="查看详情" aria-label="查看详情">⌕</a>
               <form method="post" action="/nodes/{{ node.node_id }}/reinstall">
-                <button class="ghost-btn" type="submit">重装</button>
+                <button class="icon-btn" type="submit" title="重装" aria-label="重装">↻</button>
               </form>
               <form method="post" action="/nodes/{{ node.node_id }}/delete" onsubmit="return confirm('确认删除该节点记录？此操作不会卸载远端服务。');">
-                <button class="danger-btn" type="submit">删除</button>
+                <button class="icon-btn danger-btn" type="submit" title="删除" aria-label="删除">×</button>
               </form>
             </div>
           </td>
