@@ -1,220 +1,84 @@
-# Phase 3 Development Guide
+# Phase 3 — Tunnel 模式实现记录
 
-## Goal
+## 目标
 
-Phase 3 adds one new node deployment protocol to NAT WebUI:
+在 NAT WebUI 中增加独立的 `tunnel` 协议模式，用于没有公网端口或不想暴露端口的 NAT 节点。
 
-- UI label: `tunnel`
-- Internal protocol key: `cf_vless_ws`
-- Actual client protocol: `VLESS + WS + TLS` through Cloudflare Tunnel
+`tunnel` 模式采用：
 
-This phase must not broaden into HY2, arbitrary protocol chains, Cloudflare API automation, or nat-bootstrap repository changes.
+- 本机：`sing-box` 提供 `VLESS + WebSocket` 入站，默认监听 `127.0.0.1:8080`。
+- 出口：`cloudflared` 使用 Cloudflare Tunnel token 主动连 Cloudflare。
+- 客户端：连接 Cloudflare 应用路由域名 `cf_host:443`，传输为 `ws + tls`。
 
-## User Decisions Confirmed
+## 当前设计约束
 
-1. Protocol dropdown should be simple:
-   - `vless` = current direct VLESS Reality node
-   - `tunnel` = new Cloudflare Tunnel + VLESS WS node
-2. For `tunnel` nodes, the panel should not ask for service/public port information.
-   - Local service port defaults to `8080`.
-   - This matches the Cloudflare Zero Trust public hostname route configured by the user.
-3. The domain field should be named `应用路由域名`.
-   - Backend/env meaning: `CF_HOST`
-   - Example: `jp02.holdzywoo.top`
-4. Tunnel token may be stored in the database.
-   - It should be hidden by default in the UI.
-   - It must be possible to reveal/copy it for reuse.
-5. Do not modify `wk8326-ux/nat-bootstrap` for this phase.
-   - Use its `cf_vless_ws_install.sh` only as a behavioral reference.
-   - Implement project-specific install/reinstall logic inside `natxyz`.
-6. The final export/import link should be:
-   - `vless://UUID@CF_HOST:443?encryption=none&security=tls&type=ws&host=CF_HOST&path=/&sni=CF_HOST#NODE_NAME`
-7. Deployment verification only needs to happen on the NAT host.
-   - Verify expected local services are running.
-   - Do not require external Cloudflare/client reachability validation in Phase 3.
+- 协议下拉只显示：`vless` / `tunnel`。
+- `tunnel` 是独立协议模式，不参与链式代理。
+- `tunnel` 不要求公网业务端口。
+- `tunnel` 不修改、不依赖 `nat-bootstrap` 仓库。
+- Cloudflare Tunnel token 由用户从 Cloudflare 面板复制填写。
+- 应用路由域名由用户提前在 Cloudflare Tunnel Public Hostname 中配置。
 
-## Important Architecture Decision
+## 已实现
 
-`tunnel` nodes are not valid front nodes for the current chain proxy design.
+- 数据库新增 tunnel 字段：
+  - `cf_host`
+  - `cf_tunnel_token`
+  - `ws_port`
+  - `ws_path`
+- 新建 / 编辑节点页支持 `tunnel`：
+  - 显示应用路由域名
+  - 显示 Cloudflare Tunnel token
+  - 显示本地 WS 端口，默认 `8080`
+  - 显示 WS 路径，默认 `/`
+  - 隐藏公网端口与 Reality 监听端口
+- 节点详情页支持 tunnel：
+  - 显示应用路由域名
+  - 显示本地 WS 端口
+  - token 默认隐藏，仅提供复制值
+  - 生成可导入 VLESS WS TLS 链接
+- `deployer.py` 已新增：
+  - `build_tunnel_singbox_config()`
+  - `build_tunnel_node_meta()`
+  - `build_tunnel_vless_link()`
+  - `build_tunnel_remote_script()`
+- `run_real_deploy()` 已按协议分支：
+  - `vless`：沿用原 Reality 部署
+  - `tunnel`：部署 `sing-box + cloudflared`
 
-Why:
+## Tunnel 远端部署行为
 
-- Current chain front node must accept real client traffic directly and then forward to a backend.
-- A Cloudflare Tunnel node does not expose a normal public TCP/Reality ingress.
-- Its public entry is Cloudflare-managed HTTPS/WebSocket on a hostname.
-- It is better treated as an egress/landing/backend style node.
+目标机执行：
 
-Phase 3 selector behavior:
+- 安装基础依赖：`curl`、`ca-certificates`、`tar`、`gzip`、`coreutils`、`procps`。
+- 按架构选择 `sing-box` release：`amd64` / `arm64` / `armv7`。
+- 下载 `cloudflared` 对应架构二进制。
+- 写入 `/etc/sing-box/config.json`。
+- 写入 `/etc/cloudflared/token`，使用 token-file 方式启动。
+- 写入 systemd 与 OpenRC 服务文件。
+- 启动 / 重启 `sing-box` 与 `cloudflared-tunnel`。
+- 检查本地 WS 监听端口，默认 `8080`。
+- 保留原有 agent 上报 cron。
 
-- `tunnel` nodes must not appear in the chain front-node dropdown.
-- For the initial Phase 3 MVP, keep chain support unchanged and only allow `vless` nodes in both front and backend dropdowns.
-- Future Phase 3.1 may allow `tunnel` as backend only, with a new mixed chain mode: `vless -> tunnel`.
+## 已验证
 
-Reason to defer backend-chain support:
+- `python3 -m compileall app/deployer.py` 通过。
+- tunnel 配置生成 smoke test 通过。
+- tunnel meta 生成 smoke test 通过。
+- tunnel VLESS WS TLS 链接生成通过。
+- tunnel 远端脚本通过 `bash -n` 语法检查。
+- `_fetch_latest_singbox()` 可获取最新版本与多架构包，本轮结果为 `v1.13.12`，包含 `amd64` / `arm64` / `armv7`。
+- 页面端 TestClient 回归通过：登录、新建 tunnel、详情、编辑、列表展示均正常。
+- 单元测试通过：`10 passed, 2 warnings`。
 
-- Existing Phase 2 chain logic supports only `VLESS Reality -> VLESS Reality`.
-- Supporting tunnel backend requires front-node outbound generation for `VLESS + WS + TLS`:
-  - address: `CF_HOST`
-  - port: `443`
-  - security: `tls`
-  - transport: `ws`
-  - host header: `CF_HOST`
-  - path: `/`
-- This is a separate chain mode and should not be mixed into the first tunnel node MVP.
+## 未完成 / 待实机验证
 
-## UI Requirements
+- 还未用真实 Cloudflare Tunnel token 在实际 NAT / Alpine 节点上跑完整部署。
+- 真实可用性仍需验证：Cloudflare Tunnel 在线、应用路由命中、客户端导入后可访问外网。
+- 若目标机没有 `python3`，当前远端写文件步骤会失败；后续如要覆盖极简 Alpine，应把远端写文件改成 `cat` / `printf` 或先安装 `python3`。
 
-### Node Form
+## 版本管理
 
-Protocol dropdown values:
-
-- `vless`
-- `tunnel`
-
-When `vless` is selected, preserve current fields and behavior.
-
-When `tunnel` is selected, show:
-
-- Node name
-- SSH IP
-- SSH port
-- SSH user
-- SSH password
-- 应用路由域名
-- Tunnel token
-
-When `tunnel` is selected, hide or disable:
-
-- public port
-- listen port
-- Reality target
-- front/backend chain selectors
-
-### Node Detail
-
-For tunnel nodes, show:
-
-- protocol: `tunnel`
-- 应用路由域名
-- local WS port: `8080`
-- token status: configured / missing
-- reveal/copy token action
-- exported VLESS link
-
-Token should not be displayed by default.
-
-### Node List
-
-Show tunnel nodes as normal nodes, but visually distinguish protocol as `tunnel`.
-
-## Data Model Requirements
-
-Add storage for tunnel-specific fields without breaking existing direct and chain nodes:
-
-- `cf_host` or equivalent: application route hostname
-- `cf_tunnel_token` or equivalent: Cloudflare Tunnel token
-- optional fixed/default `ws_port`: default `8080`
-- optional `ws_path`: default `/`
-
-Do not store token in long-term memory or public docs.
-Database storage is allowed for this project.
-
-## Deployment Requirements
-
-Implement project-local deployment logic by referencing the existing nat-bootstrap script behavior.
-
-Do not shell out to the remote nat-bootstrap script as the only implementation if the project needs structured status and reinstall behavior.
-
-Target runtime should prefer `sing-box` for the tunnel protocol unless inspection proves Xray is simpler and more reliable for this project.
-
-Minimum remote deployment behavior:
-
-1. SSH into target node.
-2. Install required packages.
-3. Install or update `sing-box`.
-4. Install or update `cloudflared`.
-5. Generate/reuse VLESS UUID.
-6. Write local VLESS WS inbound on `127.0.0.1:8080` or `0.0.0.0:8080` depending on cloudflared route needs.
-7. Store Cloudflare Tunnel token on the remote host as a root-readable token file.
-8. Configure service manager:
-   - systemd for Debian/Ubuntu
-   - OpenRC only if later needed for Alpine
-9. Start/restart services.
-10. Verify local services are running:
-    - `sing-box` active
-    - `cloudflared` active
-    - local `8080` listener exists
-11. Save final generated VLESS link to `last_vless_link`.
-
-## Reinstall Behavior
-
-For tunnel nodes, reinstall should:
-
-- reuse saved `cf_host`
-- reuse saved `cf_tunnel_token`
-- reuse or regenerate UUID according to existing project convention
-- rewrite service/config files only for this node's tunnel deployment
-- restart only the relevant services
-- update exported link name to current node name
-
-## Link Generation
-
-Tunnel link must be generated from current node state, not stale initial node name.
-
-Format:
-
-```text
-vless://UUID@CF_HOST:443?encryption=none&security=tls&type=ws&host=CF_HOST&path=/&sni=CF_HOST#NODE_NAME
-```
-
-Rules:
-
-- Fragment `#NODE_NAME` must update when node name changes.
-- Subscriptions must use current node name.
-- Clash export must use current node name.
-
-## Chain Interaction Rules
-
-Initial Phase 3:
-
-- Chain creation remains `vless -> vless` only.
-- `tunnel` nodes are hidden from front-node dropdown.
-- `tunnel` nodes are also hidden from backend dropdown until mixed chain support is explicitly implemented.
-
-Future Phase 3.1:
-
-- Add backend-only tunnel support if desired.
-- New mode should be explicit, e.g. `vless -> tunnel`.
-- Do not overload the existing Phase 2 `vless_reality_to_vless_reality` mode.
-
-## Non-Goals
-
-Phase 3 must not include:
-
-- Creating Cloudflare Tunnel through Cloudflare API
-- Creating DNS or Public Hostname route through Cloudflare API
-- Editing `wk8326-ux/nat-bootstrap`
-- HY2 support
-- Generic protocol framework rewrite
-- Allowing tunnel nodes as front chain nodes
-- Mixed chain support in the first MVP
-- External client handshake verification requirement
-
-## Verification Checklist
-
-Before declaring Phase 3 complete:
-
-- Creating a `vless` node still works.
-- Creating a `tunnel` node stores host/token and does not require service/public ports.
-- Editing a `tunnel` node preserves and updates host/token correctly.
-- Token is hidden by default but can be copied/revealed.
-- Deploy/reinstall on a real Debian test node starts expected services.
-- Local remote verification confirms:
-  - `sing-box` service active
-  - `cloudflared` service active
-  - `8080` listener exists
-- Exported VLESS link matches current node name.
-- Subscription link matches current node name.
-- Chain dropdowns exclude tunnel nodes in Phase 3 MVP.
-- Test suite passes.
-- GitHub is updated after verification.
+- 项目已初始化为独立 git 仓库：`/root/.nanobot/workspace/nat-webui-project/.git`。
+- 初始提交：`f3bd215 Initial NAT WebUI with tunnel deployment`。
+- 已忽略运行数据、数据库、日志、缓存与本地临时 JSON。
