@@ -434,10 +434,36 @@ def build_clash_subscription_url(request: Request) -> str:
 
 
 
+
+def vless_link_with_name(link: str, name: str) -> str:
+    link = (link or "").strip()
+    name = (name or "").strip()
+    if not link or not name:
+        return link
+    try:
+        parsed = urllib.parse.urlparse(link)
+    except ValueError:
+        return link
+    if parsed.scheme != "vless":
+        return link
+    quoted_name = urllib.parse.quote(name, safe="")
+    return urllib.parse.urlunparse((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        parsed.params,
+        parsed.query,
+        quoted_name,
+    ))
+
+
+def display_vless_link_for_node(node: sqlite3.Row | dict[str, object]) -> str:
+    return vless_link_with_name(str(node["last_vless_link"] or ""), str(node["name"] or ""))
+
 def build_subscription_payload() -> str:
     links = []
     for node in list_subscribable_nodes():
-        link = (node["last_vless_link"] or "").strip()
+        link = display_vless_link_for_node(node).strip()
         if link:
             links.append(link)
     plain = "\n".join(links)
@@ -487,7 +513,7 @@ def build_clash_subscription_payload() -> str:
     proxies = []
     seen_names: set[str] = set()
     for node in list_subscribable_nodes():
-        link = (node["last_vless_link"] or "").strip()
+        link = display_vless_link_for_node(node).strip()
         if not link:
             continue
         proxy = _vless_link_to_clash_proxy(link)
@@ -556,7 +582,7 @@ async def nodes_page(request: Request):
             "backend_node_name": node["backend_node_name"],
             "badge_class": badge_class,
             "badge_text": badge_text,
-            "last_vless_link": node["last_vless_link"] or "",
+            "last_vless_link": display_vless_link_for_node(node),
             "tags": tag_map.get(node["node_id"], []),
             "can_reinstall": True,
             "is_chain": bool(node["protocol_type"] == PROTOCOL_CHAIN),
@@ -874,6 +900,7 @@ async def node_detail_page(request: Request, node_id: str):
             "request": request,
             "title": node["name"],
             "node": node,
+            "display_vless_link": display_vless_link_for_node(node),
             "deployments": deployments,
             "badge_class": badge_class,
             "badge_text": badge_text,
@@ -973,6 +1000,7 @@ async def node_edit_submit(
             form_kind="chain" if is_chain_protocol(payload.get("protocol_type")) else "direct",
         )
 
+    payload["last_vless_link"] = vless_link_with_name(str(node["last_vless_link"] or ""), str(payload.get("name") or ""))
     update_node_record(node_id, payload)
     return RedirectResponse(url=f"/nodes/{node_id}", status_code=303)
 

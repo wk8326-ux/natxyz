@@ -245,6 +245,64 @@ def test_create_chain_node_record_preserves_front_and_backend_references() -> No
     assert listed[chain_id]["backend_node_name"] == "BACKEND_FOR_CHAIN"
 
 
+def test_renamed_node_updates_export_and_subscription_link_name() -> None:
+    login()
+    node_id = create_node_record(
+        {
+            "name": "OLD_LINK_NAME",
+            "ip": "198.51.100.61",
+            "ssh_port": 2261,
+            "ssh_user": "root",
+            "ssh_password": "pass",
+            "public_port": 443,
+            "listen_port": 443,
+        }
+    )
+    from app.db import get_conn
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE nodes SET last_vless_link = ?, generated_uuid = ?, generated_public_key = ?, generated_short_id = ? WHERE node_id = ?",
+            (
+                "vless://11111111-1111-1111-1111-111111111111@198.51.100.61:443?security=reality&sni=www.microsoft.com&pbk=pubkey&sid=abcd&type=tcp&flow=xtls-rprx-vision#OLD_LINK_NAME",
+                "11111111-1111-1111-1111-111111111111",
+                "pubkey",
+                "abcd",
+                node_id,
+            ),
+        )
+
+    response = client.post(
+        f"/nodes/{node_id}/edit",
+        data={
+            "name": "NEW_LINK_NAME",
+            "ip": "198.51.100.61",
+            "ssh_port": "2261",
+            "ssh_user": "root",
+            "ssh_password": "pass",
+            "public_port": "443",
+            "listen_port": "443",
+            "protocol_type": "vless_reality_singbox",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    detail_response = client.get(f"/nodes/{node_id}")
+    assert detail_response.status_code == 200
+    assert "#NEW_LINK_NAME" in detail_response.text
+    assert "#OLD_LINK_NAME" not in detail_response.text
+
+    subscription_response = client.get("/nodes")
+    assert subscription_response.status_code == 200
+    token = subscription_response.text.split("/sub/")[1].split('"')[0]
+    feed = client.get(f"/sub/{token}")
+    assert feed.status_code == 200
+    import base64
+    decoded = base64.b64decode(feed.text).decode("utf-8")
+    assert "#NEW_LINK_NAME" in decoded
+    assert "#OLD_LINK_NAME" not in decoded
+
+
 def test_edit_chain_node_name_redirects_to_detail_and_updates() -> None:
     login()
     front_id = create_node_record(

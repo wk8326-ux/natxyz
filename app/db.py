@@ -332,6 +332,7 @@ def update_node_record(node_id: str, payload: dict[str, Any]) -> None:
                 listen_port = ?,
                 manual_country_code = ?,
                 manual_region_label = ?,
+                last_vless_link = ?,
                 updated_at = ?
             WHERE node_id = ?
             """,
@@ -349,6 +350,7 @@ def update_node_record(node_id: str, payload: dict[str, Any]) -> None:
                 payload["listen_port"],
                 payload.get("manual_country_code"),
                 payload.get("manual_region_label"),
+                payload.get("last_vless_link"),
                 now_iso(),
                 node_id,
             ),

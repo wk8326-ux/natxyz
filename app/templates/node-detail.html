@@ -18,7 +18,7 @@
     </div>
   </div>
   <div class="detail-actions">
-    <button class="icon-btn" type="button" title="复制链接" aria-label="复制链接" onclick='copyText({{ (node["last_vless_link"] or "") | tojson }}, this)' {% if not node['last_vless_link'] %}disabled{% endif %}>⧉</button>
+    <button class="icon-btn" type="button" title="复制链接" aria-label="复制链接" onclick='copyText({{ display_vless_link | tojson }}, this)' {% if not display_vless_link %}disabled{% endif %}>⧉</button>
     <form method="post" action="/nodes/{{ node['node_id'] }}/reinstall" style="display:inline;">
       <button class="icon-btn" type="submit" title="{% if node['generated_uuid'] %}重新部署{% else %}开始部署{% endif %}" aria-label="{% if node['generated_uuid'] %}重新部署{% else %}开始部署{% endif %}">↻</button>
     </form>
@@ -56,8 +56,8 @@
       <div><dt>{% if is_chain %}链式 UUID{% else %}UUID{% endif %}</dt><dd class="mono break-all">{{ node['generated_uuid'] or '暂无' }}</dd></div>
       <div><dt>Public Key</dt><dd class="mono break-all">{{ node['generated_public_key'] or '暂无' }}</dd></div>
       <div><dt>Short ID</dt><dd class="mono break-all">{{ node['generated_short_id'] or '暂无' }}</dd></div>
-      <div><dt>导入链接</dt><dd class="mono break-all">{{ node['last_vless_link'] or '暂无成功部署链接' }}</dd></div>
-      {% if node['last_vless_link'] %}
+      <div><dt>导入链接</dt><dd class="mono break-all">{{ display_vless_link or '暂无成功部署链接' }}</dd></div>
+      {% if display_vless_link %}
       <div><dt>查看参数</dt><dd><a class="ghost-btn link-plain" href="/deployments/{{ latest_deploy_id or '' }}">查看最近部署任务</a></dd></div>
       {% endif %}
     </dl>
