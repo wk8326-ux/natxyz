@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title }} - NAT WebUI</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">NAT WebUI</div>
+        <h1>{{ title }}</h1>
+      </div>
+      {% if request.session.get('auth') %}
+      <form method="post" action="/logout">
+        <button class="ghost-btn" type="submit">退出</button>
+      </form>
+      {% endif %}
+    </header>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script>
+    function restoreButtonContent(button, html, ms) {
+      if (!button) return;
+      setTimeout(() => {
+        button.innerHTML = html;
+      }, ms);
+    }
+
+    async function copyText(text, button) {
+      if (!text) return;
+      const originalHtml = button ? button.innerHTML : '';
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const textarea = document.createElement('textarea');
+          textarea.value = text;
+          textarea.setAttribute('readonly', '');
+          textarea.style.position = 'absolute';
+          textarea.style.left = '-9999px';
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textarea);
+        }
+        if (button) {
+          button.innerHTML = '✓';
+          restoreButtonContent(button, originalHtml, 1200);
+        }
+      } catch (err) {
+        console.error(err);
+        if (button) {
+          button.innerHTML = '✕';
+          restoreButtonContent(button, originalHtml, 1500);
+        }
+      }
+    }
+  </script>
+</body>
+</html>
