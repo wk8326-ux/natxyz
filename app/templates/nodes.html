@@ -79,7 +79,9 @@
             {{ node.ip }}
             {% endif %}
           </td>
-          <td><span class="flag-cell" title="{{ node.region_label }}">{{ node.region_flag or '—' }}</span></td>
+          <td>
+            <span class="flag-cell" title="{{ node.region_label }}" data-region-code="{{ node.region_code }}">{{ node.region_flag or '—' }}</span>
+          </td>
           <td><span class="badge proto">{{ node.protocol_label }}</span></td>
           <td><span class="badge {{ node.badge_class }}">{{ node.badge_text }}</span></td>
           <td>

@@ -308,7 +308,7 @@ def manual_region_from_node(node) -> dict[str, str] | None:
     label = str(node["manual_region_label"] or "").strip() if "manual_region_label" in node.keys() else ""
     if not code and not label:
         return None
-    return {"flag": country_code_to_flag(code) if code else "📍", "label": label or COUNTRY_NAME_MAP.get(code, code)}
+    return {"code": code, "flag": country_code_to_flag(code) if code else "📍", "label": label or COUNTRY_NAME_MAP.get(code, code)}
 
 
 def lookup_ip_region(ip: str) -> dict[str, str]:
@@ -323,10 +323,10 @@ def lookup_ip_region(ip: str) -> dict[str, str]:
             code = str(data.get("countryCode") or "").upper()
             region = str(data.get("regionName") or "").strip()
             country = COUNTRY_NAME_MAP.get(code, str(data.get("country") or code))
-            return {"flag": country_code_to_flag(code), "label": f"{country} {region}".strip()}
+            return {"code": code, "flag": country_code_to_flag(code), "label": f"{country} {region}".strip()}
     except Exception:
         pass
-    return {"flag": "🌐", "label": ip}
+    return {"code": "", "flag": "🌐", "label": ip}
 
 
 def render_node_form(
@@ -537,7 +537,7 @@ async def nodes_page(request: Request):
             backend_region = manual_region_from_node(backend) if backend else None
             if not backend_region:
                 backend_region = region_cache.setdefault(f"node:{node['backend_node_id']}", lookup_ip_region(backend["ip"] if backend else ""))
-            region = {"flag": f"{front_region.get('flag', '')}{backend_region.get('flag', '')}", "label": "链式节点"}
+            region = {"code": "", "flag": f"{front_region.get('flag', '')}{backend_region.get('flag', '')}", "label": "链式节点"}
         else:
             manual_region = manual_region_from_node(node)
             region = manual_region or region_cache.setdefault(node["ip"], lookup_ip_region(node["ip"]))
@@ -548,6 +548,7 @@ async def nodes_page(request: Request):
             "protocol_type": node["protocol_type"],
             "protocol_label": protocol_label(node["protocol_type"]),
             "region_flag": region.get("flag", ""),
+            "region_code": region.get("code", ""),
             "region_label": region.get("label", ""),
             "front_node_id": node["front_node_id"],
             "backend_node_id": node["backend_node_id"],

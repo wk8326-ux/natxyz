@@ -375,6 +375,8 @@ button[disabled], .ghost-btn[disabled], .icon-btn[disabled] {
   min-width: 30px;
   font-size: 18px;
   line-height: 1;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", emoji, sans-serif;
+  font-variant-emoji: emoji;
 }
 
 .tag-toolbar {
