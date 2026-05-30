@@ -12,20 +12,6 @@
 - 节点列表一键复制 `VLESS` 导入链接
 - 订阅 URL：返回当前全部有效节点的 Base64 订阅内容
 
-
-## 快速部署
-
-```bash
-git clone https://github.com/wk8326-ux/natxyz.git
-cd natxyz
-sh scripts/install.sh
-./scripts/run-prod.sh
-```
-
-默认监听 `0.0.0.0:8788`。首次运行 `scripts/install.sh` 会自动生成 `.env.runtime`，并输出默认管理员密码。
-
-如需后台运行，建议自行接入 systemd / supervisor / tmux；正式公网暴露前请修改 `.env.runtime` 里的管理员密码和 `NAT_WEBUI_SESSION_SECRET`。
-
 ## 本地运行
 
 ```bash

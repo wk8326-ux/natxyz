@@ -245,6 +245,65 @@ def test_create_chain_node_record_preserves_front_and_backend_references() -> No
     assert listed[chain_id]["backend_node_name"] == "BACKEND_FOR_CHAIN"
 
 
+def test_edit_chain_node_name_redirects_to_detail_and_updates() -> None:
+    login()
+    front_id = create_node_record(
+        {
+            "name": "FRONT_EDIT_CHAIN",
+            "ip": "198.51.100.41",
+            "ssh_port": 2241,
+            "ssh_user": "root",
+            "ssh_password": "front-pass",
+            "public_port": 443,
+            "listen_port": 443,
+        }
+    )
+    backend_id = create_node_record(
+        {
+            "name": "BACKEND_EDIT_CHAIN",
+            "ip": "198.51.100.42",
+            "ssh_port": 2242,
+            "ssh_user": "root",
+            "ssh_password": "backend-pass",
+            "public_port": 443,
+            "listen_port": 443,
+        }
+    )
+    chain_id = create_node_record(
+        {
+            "name": "CHAIN_OLD_NAME",
+            "ip": "198.51.100.41",
+            "ssh_port": 2241,
+            "ssh_user": "root",
+            "ssh_password": "front-pass",
+            "protocol_type": "vless_chain",
+            "front_node_id": front_id,
+            "backend_node_id": backend_id,
+            "chain_mode": "vless_reality_to_vless_reality",
+            "public_port": 443,
+            "listen_port": 443,
+        }
+    )
+
+    response = client.post(
+        f"/nodes/{chain_id}/edit",
+        data={
+            "name": "CHAIN_NEW_NAME",
+            "protocol_type": "vless_chain",
+            "front_node_id": front_id,
+            "backend_node_id": backend_id,
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/nodes/{chain_id}"
+    assert get_node(chain_id)["name"] == "CHAIN_NEW_NAME"
+
+    detail_response = client.get(f"/nodes/{chain_id}")
+    assert detail_response.status_code == 200
+    assert "CHAIN_NEW_NAME" in detail_response.text
+
+
 def test_phase2_markdown_exists() -> None:
     with open("PHASE2.md", "r", encoding="utf-8") as f:
         content = f.read()

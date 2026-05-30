@@ -68,8 +68,12 @@
         <div class="field-note">链式节点不填写端口：沿用前置节点的现有公网入口，后续由部署逻辑写入链式专用用户与路由规则。</div>
       </div>
       <input type="hidden" name="chain_mode" value="{{ chain_mode }}">
-      <input type="hidden" name="public_port" value="">
-      <input type="hidden" name="listen_port" value="">
+      <input type="hidden" name="ip" value="{{ form_values.get('ip', '') }}">
+      <input type="hidden" name="ssh_port" value="{{ form_values.get('ssh_port', '') }}">
+      <input type="hidden" name="ssh_user" value="{{ form_values.get('ssh_user', '') }}">
+      <input type="hidden" name="ssh_password" value="{{ form_values.get('ssh_password', '') }}">
+      <input type="hidden" name="public_port" value="{{ form_values.get('public_port', '') }}">
+      <input type="hidden" name="listen_port" value="{{ form_values.get('listen_port', '') }}">
       {% else %}
       <label>
         <span>NAT IP</span>
