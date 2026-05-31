@@ -252,6 +252,11 @@ def test_replace_vless_fragment_keeps_flag_when_node_name_changes() -> None:
     assert urllib.parse.unquote(urllib.parse.urlparse(new_link).fragment) == "🇯🇵 new-name"
 
 
+def test_vless_remark_can_infer_country_from_node_name() -> None:
+    node = {"name": "风见香港02", "manual_country_code": "", "manual_region_label": "", "country_code": ""}
+    assert vless_remark_for_node(node) == "🇭🇰 风见香港02"
+
+
 def test_vless_remark_falls_back_to_auto_country_code() -> None:
     node = {"name": "auto-node", "manual_country_code": "", "manual_region_label": "", "country_code": "US"}
     assert vless_remark_for_node(node) == "🇺🇸 auto-node"
@@ -402,8 +407,8 @@ def test_renamed_node_updates_export_and_subscription_link_name() -> None:
 
     detail_response = client.get(f"/nodes/{node_id}")
     assert detail_response.status_code == 200
-    assert "#NEW_LINK_NAME" in detail_response.text
-    assert "#OLD_LINK_NAME" not in detail_response.text
+    assert "NEW_LINK_NAME" in detail_response.text
+    assert "OLD_LINK_NAME" not in detail_response.text
 
     subscription_response = client.get("/nodes")
     assert subscription_response.status_code == 200
@@ -412,8 +417,8 @@ def test_renamed_node_updates_export_and_subscription_link_name() -> None:
     assert feed.status_code == 200
     import base64
     decoded = base64.b64decode(feed.text).decode("utf-8")
-    assert "#NEW_LINK_NAME" in decoded
-    assert "#OLD_LINK_NAME" not in decoded
+    assert "NEW_LINK_NAME" in decoded
+    assert "OLD_LINK_NAME" not in decoded
 
 
 def test_edit_chain_node_name_redirects_to_detail_and_updates() -> None:

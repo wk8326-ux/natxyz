@@ -562,7 +562,7 @@ def build_vless_link(node: dict, *, generated_uuid: str, generated_public_key: s
             f"?security=reality&sni={selected_reality_target}&pbk={generated_public_key}"
             f"&sid={generated_short_id}&type=tcp&flow=xtls-rprx-vision"
         ),
-        vless_remark_for_node(node),
+        vless_remark_for_node(node, allow_lookup=True),
     )
 
 

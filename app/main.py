@@ -566,7 +566,7 @@ def display_protocol_label(protocol_type: str | None) -> str:
 
 
 def vless_link_with_node_remark(link: str, node: sqlite3.Row | dict[str, object]) -> str:
-    return replace_vless_fragment(link, vless_remark_for_node(node))
+    return replace_vless_fragment(link, vless_remark_for_node(node, allow_lookup=True))
 
 
 def build_tunnel_vless_link(node: sqlite3.Row | dict[str, object], *, generated_uuid: str | None = None) -> str:
@@ -579,7 +579,7 @@ def build_tunnel_vless_link(node: sqlite3.Row | dict[str, object], *, generated_
     ws_path = str(node["ws_path"] or "/").strip() or "/"
     if not ws_path.startswith("/"):
         ws_path = f"/{ws_path}"
-    name = urllib.parse.quote(vless_remark_for_node(node), safe="")
+    name = urllib.parse.quote(vless_remark_for_node(node, allow_lookup=True), safe="")
     query = urllib.parse.urlencode(
         {
             "encryption": "none",
