@@ -236,6 +236,13 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
     for key in REQUIRED_FIELDS:
         cleaned.setdefault(key, str(form.get(key, "")).strip())
 
+    # Tunnel mode does not use NAT public/listen ports. Keep internal safe defaults
+    # so DB NOT NULL / integer conversion paths never reject an otherwise valid
+    # tunnel node when the hidden/unused inputs are blank.
+    if is_tunnel_protocol(protocol_type):
+        cleaned["public_port"] = 443
+        cleaned["listen_port"] = str(form.get("ws_port") or "8080").strip() or "8080"
+
     cleaned["front_node_id"] = str(form.get("front_node_id") or "").strip()
     cleaned["backend_node_id"] = str(form.get("backend_node_id") or "").strip()
     cleaned["chain_mode"] = CHAIN_MODE if is_chain_protocol(protocol_type) else None
