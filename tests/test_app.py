@@ -9,7 +9,9 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("NAT_WEBUI_DB_PATH", f"/tmp/nat_webui_test_{uuid.uuid4().hex}.db")
 
 from app import jobs, main
-from app.db import create_node_record, get_node, init_db, list_nodes
+from app.chain_deployer import build_front_chain_config
+from app.deployer import build_vless_link, resolve_host_for_ssh
+from app.db import create_node_record, get_node, init_db, list_chain_backend_nodes, list_direct_vless_nodes, list_nodes
 from app.main import app
 
 init_db()
@@ -59,6 +61,38 @@ def test_nodes_page_after_login() -> None:
     assert "复制 v2rayN 订阅 URL" in response.text
     assert "复制 Clash 订阅 URL" in response.text
 
+
+
+def test_nodes_page_uses_local_svg_flags_with_badge_fallback() -> None:
+    login()
+    create_node_record(
+        {
+            "name": f"FLAG_TEST_{uuid.uuid4().hex[:6]}",
+            "ip": "198.51.100.88",
+            "ssh_port": 2288,
+            "ssh_user": "root",
+            "ssh_password": "test-pass",
+            "public_port": 443,
+            "listen_port": 443,
+            "protocol_type": "vless_reality_singbox",
+            "manual_country_code": "US",
+            "manual_region_label": "美国",
+            "cf_host": "",
+            "cf_tunnel_token": "",
+            "ws_port": 8080,
+            "ws_path": "/",
+            "front_node_id": None,
+            "backend_node_id": None,
+            "chain_mode": None,
+        }
+    )
+    response = client.get("/nodes")
+    assert response.status_code == 200
+    assert 'class="flag-icon"' in response.text
+    assert 'src="/static/flags/' in response.text
+    assert '.svg' in response.text
+    assert 'class="flag-badge"' in response.text
+    assert 'force-flag-badge' not in response.text
 
 def test_create_reinstall_and_delete_node_flow(monkeypatch) -> None:
     login()
@@ -157,6 +191,47 @@ def test_create_reinstall_and_delete_node_flow(monkeypatch) -> None:
     missing = client.get(detail_url)
     assert missing.status_code == 404
     assert "节点不存在" in missing.text
+
+
+def test_create_node_accepts_ddns_domain_as_ip_field_and_preserves_link_host() -> None:
+    login()
+    response = client.post(
+        "/nodes/new",
+        data={
+            "name": "DDNS_DOMAIN_NODE",
+            "ip": "https://HINET.Example.COM/",
+            "ssh_port": "2222",
+            "ssh_user": "root",
+            "ssh_password": "ddns-pass",
+            "public_port": "20282",
+            "listen_port": "20282",
+            "protocol_type": "vless_reality_singbox",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    node_id = response.headers["location"].rsplit("/", 1)[-1]
+    node = get_node(node_id)
+    assert node["ip"] == "hinet.example.com"
+
+    link = build_vless_link(
+        dict(node),
+        generated_uuid="11111111-1111-1111-1111-111111111111",
+        generated_public_key="pubkey",
+        generated_short_id="abcd",
+        selected_reality_target="www.microsoft.com",
+    )
+    assert "@hinet.example.com:20282" in link
+
+
+def test_resolve_host_for_ssh_resolves_domain_but_keeps_ip_literal(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.deployer.socket.getaddrinfo",
+        lambda host, *args, **kwargs: [(None, None, None, None, ("203.0.113.77", 0))],
+    )
+    assert resolve_host_for_ssh("example.com") == "203.0.113.77"
+    assert resolve_host_for_ssh("198.51.100.5") == "198.51.100.5"
+
 
 
 def test_create_node_rejects_duplicate_ip_and_ssh_port() -> None:
@@ -361,6 +436,108 @@ def test_edit_chain_node_name_redirects_to_detail_and_updates() -> None:
     assert detail_response.status_code == 200
     assert "CHAIN_NEW_NAME" in detail_response.text
 
+
+def test_build_front_chain_config_rejects_tunnel_ws_backend() -> None:
+    config = {
+        "inbounds": [
+            {
+                "type": "vless",
+                "tag": "in-1",
+                "tls": {"reality": {"enabled": True}},
+                "users": [{"name": "old", "uuid": "old-uuid"}],
+            }
+        ],
+        "outbounds": [
+            {"tag": "direct", "type": "direct"},
+            {"tag": "old-out", "type": "vless", "server": "old", "server_port": 1234},
+        ],
+        "route": {"rules": [{"outbound": "old-out"}]},
+    }
+    backend = {
+        "protocol_type": "cf_vless_ws",
+        "cf_host": "backend-tunnel.example.com",
+        "ws_path": "/",
+        "generated_uuid": "33333333-3333-3333-3333-333333333333",
+    }
+
+    with pytest.raises(Exception, match="tunnel backend is disabled"):
+        build_front_chain_config(config, chain_tag="chain-x", chain_uuid="chain-uuid", backend=backend)
+
+
+def test_build_front_chain_config_uses_reality_backend_when_not_tunnel() -> None:
+    config = {
+        "inbounds": [
+            {"type": "vless", "tag": "in-1", "tls": {"reality": {"enabled": True}}, "users": []}
+        ],
+        "outbounds": [],
+        "route": {"rules": []},
+    }
+    backend = {
+        "protocol_type": "vless_reality_singbox",
+        "ip": "198.51.100.91",
+        "public_port": 443,
+        "generated_uuid": "44444444-4444-4444-4444-444444444444",
+        "generated_public_key": "pub-key",
+        "generated_short_id": "short-id",
+        "selected_reality_target": "www.microsoft.com",
+    }
+
+    updated = build_front_chain_config(config, chain_tag="chain-y", chain_uuid="chain-uuid", backend=backend)
+    out = next(item for item in updated["outbounds"] if item["tag"] == "chain-y-out")
+    assert out["server"] == "198.51.100.91"
+    assert out["server_port"] == 443
+    assert out["tls"]["reality"]["public_key"] == "pub-key"
+    assert out["tls"]["reality"]["short_id"] == "short-id"
+
+def test_chain_form_excludes_tunnel_as_backend() -> None:
+    login()
+    front_id = create_node_record(
+        {
+            "name": "FRONT_FORM_REALITY",
+            "ip": "198.51.100.71",
+            "ssh_port": 2271,
+            "ssh_user": "root",
+            "ssh_password": "front-pass",
+            "public_port": 443,
+            "listen_port": 443,
+            "protocol_type": "vless_reality_singbox",
+            "last_vless_link": "vless://11111111-1111-1111-1111-111111111111@198.51.100.71:443?security=reality&type=tcp#FRONT_FORM_REALITY",
+        }
+    )
+    tunnel_id = create_node_record(
+        {
+            "name": "BACKEND_FORM_TUNNEL",
+            "ip": "198.51.100.72",
+            "ssh_port": 2272,
+            "ssh_user": "root",
+            "ssh_password": "tunnel-pass",
+            "protocol_type": "cf_vless_ws",
+            "public_port": 443,
+            "listen_port": 8080,
+            "cf_host": "backend-tunnel.example.com",
+            "ws_port": 8080,
+            "ws_path": "/",
+            "generated_uuid": "22222222-2222-2222-2222-222222222222",
+            "last_vless_link": "vless://22222222-2222-2222-2222-222222222222@backend-tunnel.example.com:443?security=tls&type=ws#BACKEND_FORM_TUNNEL",
+        }
+    )
+
+    direct_ids = {row["node_id"] for row in list_direct_vless_nodes()}
+    backend_ids = {row["node_id"] for row in list_chain_backend_nodes()}
+    assert front_id in direct_ids
+    assert tunnel_id not in direct_ids
+    assert front_id in backend_ids
+    assert tunnel_id not in backend_ids
+
+    response = client.get("/nodes/new-chain")
+    assert response.status_code == 200
+    html = response.text
+    front_block = html.split('name="front_node_id"', 1)[1].split('name="backend_node_id"', 1)[0]
+    backend_block = html.split('name="backend_node_id"', 1)[1].split('name="chain_mode"', 1)[0]
+    assert "FRONT_FORM_REALITY · Reality · 198.51.100.71:443" in front_block
+    assert "BACKEND_FORM_TUNNEL" not in front_block
+    assert "FRONT_FORM_REALITY · Reality · 198.51.100.71:443" in backend_block
+    assert "BACKEND_FORM_TUNNEL · tunnel · backend-tunnel.example.com:443" not in backend_block
 
 def test_phase2_markdown_exists() -> None:
     with open("PHASE2.md", "r", encoding="utf-8") as f:

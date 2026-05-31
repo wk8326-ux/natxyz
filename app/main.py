@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
+import re
 import sqlite3
 import urllib.parse
 import uuid
@@ -30,6 +32,7 @@ from .db import (
     get_or_create_subscription_token,
     ingest_agent_report,
     init_db,
+    list_chain_backend_nodes,
     list_deployments_for_node,
     list_direct_vless_nodes,
     list_node_tag_ids,
@@ -196,6 +199,36 @@ def default_form_values() -> dict[str, object]:
 
 
 
+def normalize_host_value(value: str) -> str:
+    value = str(value or "").strip()
+    value = value.replace("https://", "").replace("http://", "").strip().strip("/")
+    if "/" in value:
+        value = value.split("/", 1)[0]
+    if value.startswith("[") and "]" in value:
+        return value[1:value.index("]")].strip()
+    if value.count(":") == 1:
+        host_part, maybe_port = value.rsplit(":", 1)
+        if maybe_port.isdigit():
+            value = host_part
+    return value.strip().lower()
+
+
+_HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$")
+
+
+def is_valid_ip_or_hostname(value: str) -> bool:
+    value = normalize_host_value(value)
+    if not value:
+        return False
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        pass
+    return bool(_HOSTNAME_RE.match(value)) and "." in value
+
+
+
 def apply_chain_endpoint_defaults(cleaned: dict[str, object], front_node) -> None:
     cleaned["ip"] = front_node["ip"]
     cleaned["ssh_port"] = front_node["ssh_port"]
@@ -229,12 +262,17 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
 
     for key in required_fields:
         value = str(form.get(key, "")).strip()
+        if key == "ip":
+            value = normalize_host_value(value)
         if not value:
             errors.append(f"{key} 不能为空")
         cleaned[key] = value
 
     for key in REQUIRED_FIELDS:
-        cleaned.setdefault(key, str(form.get(key, "")).strip())
+        default_value = str(form.get(key, "")).strip()
+        if key == "ip":
+            default_value = normalize_host_value(default_value)
+        cleaned.setdefault(key, default_value)
 
     # Tunnel mode does not use NAT public/listen ports. Keep internal safe defaults
     # so DB NOT NULL / integer conversion paths never reject an otherwise valid
@@ -281,7 +319,7 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
         if front_node and front_node["protocol_type"] != PROTOCOL_DIRECT:
             errors.append("前置节点必须是 VLESS + Reality 直连节点")
         if backend_node and backend_node["protocol_type"] != PROTOCOL_DIRECT:
-            errors.append("后端节点必须是 VLESS + Reality 直连节点")
+            errors.append("后端节点必须是 VLESS + Reality 直连节点；tunnel 仅作为单节点使用，不再作为链式落地端")
         if front_node and editing_node_id and front_node["node_id"] == editing_node_id:
             errors.append("链式节点不能选择自己作为前置节点")
         if backend_node and editing_node_id and backend_node["node_id"] == editing_node_id:
@@ -306,6 +344,11 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
         cleaned["cf_tunnel_token"] = None
         cleaned["ws_port"] = 8080
         cleaned["ws_path"] = "/"
+
+    if not is_chain_protocol(protocol_type):
+        host_value = str(cleaned.get("ip") or "").strip()
+        if host_value and not is_valid_ip_or_hostname(host_value):
+            errors.append("NAT IP 可填写 IP 或 DDNS 域名，例如 1.2.3.4 / hinet.example.com")
 
     for int_key in ["ssh_port", "public_port", "listen_port", "ws_port"]:
         value = str(cleaned.get(int_key, ""))
@@ -341,6 +384,13 @@ def country_code_to_flag(country_code: str) -> str:
     return "".join(chr(127397 + ord(ch)) for ch in code)
 
 
+def country_code_to_badge(country_code: str) -> str:
+    code = country_code.strip().upper()
+    if len(code) != 2 or not code.isalpha():
+        return ""
+    return code
+
+
 COUNTRY_NAME_MAP = {
     "HK": "香港",
     "JP": "日本",
@@ -359,11 +409,33 @@ def manual_region_from_node(node) -> dict[str, str] | None:
     label = str(node["manual_region_label"] or "").strip() if "manual_region_label" in node.keys() else ""
     if not code and not label:
         return None
-    return {"code": code, "flag": country_code_to_flag(code) if code else "📍", "label": label or COUNTRY_NAME_MAP.get(code, code)}
+    return {"code": code, "flag": country_code_to_flag(code) if code else "📍", "badge": country_code_to_badge(code), "flag_codes": [code.lower()] if code else [], "label": label or COUNTRY_NAME_MAP.get(code, code)}
+
+
+def resolve_host_for_display_lookup(host: str) -> str:
+    host = normalize_host_value(host)
+    if not host:
+        return ""
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
+    try:
+        import socket
+        info = socket.getaddrinfo(host, None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
+        for item in info:
+            addr = item[4][0]
+            if addr:
+                return addr
+    except Exception:
+        return host
+    return host
+
 
 
 def lookup_ip_region(ip: str) -> dict[str, str]:
-    ip = str(ip or "").strip()
+    ip = resolve_host_for_display_lookup(str(ip or "").strip())
     if not ip:
         return {"flag": "", "label": ""}
     try:
@@ -374,10 +446,10 @@ def lookup_ip_region(ip: str) -> dict[str, str]:
             code = str(data.get("countryCode") or "").upper()
             region = str(data.get("regionName") or "").strip()
             country = COUNTRY_NAME_MAP.get(code, str(data.get("country") or code))
-            return {"code": code, "flag": country_code_to_flag(code), "label": f"{country} {region}".strip()}
+            return {"code": code, "flag": country_code_to_flag(code), "badge": country_code_to_badge(code), "flag_codes": [code.lower()], "label": f"{country} {region}".strip()}
     except Exception:
         pass
-    return {"code": "", "flag": "🌐", "label": ip}
+    return {"code": "", "flag": "🌐", "badge": "IP", "flag_codes": [], "label": ip}
 
 
 def render_node_form(
@@ -390,7 +462,8 @@ def render_node_form(
     node_id: str | None = None,
     form_kind: str = "direct",
 ):
-    direct_nodes = [node for node in list_direct_vless_nodes() if node["node_id"] != node_id]
+    front_nodes = [node for node in list_direct_vless_nodes() if node["node_id"] != node_id]
+    backend_nodes = [node for node in list_chain_backend_nodes() if node["node_id"] != node_id]
     return templates.TemplateResponse(
         request,
         "node-form.html",
@@ -401,7 +474,9 @@ def render_node_form(
             "form_values": form_values,
             "errors": errors or [],
             "node_id": node_id,
-            "direct_nodes": direct_nodes,
+            "direct_nodes": front_nodes,
+            "front_nodes": front_nodes,
+            "backend_nodes": backend_nodes,
             "protocol_direct": PROTOCOL_DIRECT,
             "protocol_chain": PROTOCOL_CHAIN,
             "protocol_tunnel": PROTOCOL_TUNNEL,
@@ -652,7 +727,11 @@ async def nodes_page(request: Request):
             backend_region = manual_region_from_node(backend) if backend else None
             if not backend_region:
                 backend_region = region_cache.setdefault(f"node:{node['backend_node_id']}", lookup_ip_region(backend["ip"] if backend else ""))
-            region = {"code": "", "flag": f"{front_region.get('flag', '')}{backend_region.get('flag', '')}", "label": "链式节点"}
+            front_badge = front_region.get("badge") or front_region.get("code") or "--"
+            backend_badge = backend_region.get("badge") or backend_region.get("code") or "--"
+            front_flag_codes = front_region.get("flag_codes") or ([str(front_region.get("code", "")).lower()] if front_region.get("code") else [])
+            backend_flag_codes = backend_region.get("flag_codes") or ([str(backend_region.get("code", "")).lower()] if backend_region.get("code") else [])
+            region = {"code": "", "flag": f"{front_region.get('flag', '')}{backend_region.get('flag', '')}", "badge": f"{front_badge}→{backend_badge}", "flag_codes": front_flag_codes + backend_flag_codes, "label": "链式节点"}
         else:
             manual_region = manual_region_from_node(node)
             region = manual_region or region_cache.setdefault(node["ip"], lookup_ip_region(node["ip"]))
@@ -663,6 +742,8 @@ async def nodes_page(request: Request):
             "protocol_type": node["protocol_type"],
             "protocol_label": protocol_label(node["protocol_type"]),
             "region_flag": region.get("flag", ""),
+            "region_flag_codes": region.get("flag_codes", []),
+            "region_badge": region.get("badge", "") or region.get("code", ""),
             "region_code": region.get("code", ""),
             "region_label": region.get("label", ""),
             "front_node_id": node["front_node_id"],
@@ -883,8 +964,14 @@ def generate_chain_deployment(chain_node_id: str) -> tuple[str, str, str, dict[s
             raise ValueError("前置节点或后端节点不存在")
         if not front["last_vless_link"] or not front["generated_public_key"] or not front["generated_short_id"]:
             raise ValueError("前置节点还没有成功部署链接，不能生成链式入口")
-        if not backend["last_vless_link"] or not backend["generated_public_key"] or not backend["generated_short_id"]:
+        if not backend["last_vless_link"] or not backend["generated_uuid"]:
             raise ValueError("后端节点还没有成功部署链接，不能生成链式节点")
+        if backend["protocol_type"] == PROTOCOL_DIRECT and (not backend["generated_public_key"] or not backend["generated_short_id"]):
+            raise ValueError("Reality 后端节点还没有完整 Reality 参数，不能生成链式节点")
+        if backend["protocol_type"] == PROTOCOL_TUNNEL:
+            raise ValueError("tunnel 节点仅作为单节点使用，不支持作为链式落地端")
+        if backend["protocol_type"] != PROTOCOL_DIRECT:
+            raise ValueError("后端节点协议不支持链式落地，仅支持 VLESS + Reality")
 
         chain_uuid = chain["generated_uuid"] or str(uuid.uuid4())
         link = build_chain_link(dict(chain), dict(front), dict(backend), chain_uuid)
@@ -917,12 +1004,14 @@ def generate_chain_deployment(chain_node_id: str) -> tuple[str, str, str, dict[s
         )
         chain_tag = f"chain-{chain_node_id}"
         apply_log = apply_front_chain_config(dict(front), dict(backend), chain_tag=chain_tag, chain_uuid=chain_uuid)
-        summary = f"链式节点已真实下发：前置 {front['name']} 入口 {front['ip']}:{front['public_port']}，按链式用户路由到后端 {backend['name']}。"
+        backend_target = f"{backend['ip']}:{backend['public_port']}"
+        backend_protocol = "reality"
+        summary = f"链式节点已真实下发：前置 {front['name']} 入口 {front['ip']}:{front['public_port']}，按链式用户路由到后端 {backend['name']}（{backend_protocol} {backend_target}）。"
         raw = "\n".join(
             [
                 "[stage] chain-route-apply",
                 f"front_node={front['name']} {front['ip']}:{front['public_port']}",
-                f"backend_node={backend['name']} {backend['ip']}:{backend['public_port']}",
+                f"backend_node={backend['name']} {backend_protocol} {backend_target}",
                 f"chain_tag={chain_tag}",
                 f"chain_uuid={chain_uuid}",
                 apply_log,

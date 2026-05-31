@@ -46,14 +46,14 @@
       {% if is_chain_form %}
       <input type="hidden" name="protocol_type" value="{{ protocol_chain }}">
       <div class="full-span">
-        <div class="field-note">链式节点必须选择两个已有直连节点；客户端最终连接前置节点，后端作为落地出口。</div>
+        <div class="field-note">链式节点必须选择一个 Reality 前置节点；后端可选择 Reality 或 tunnel 落地节点。客户端最终连接前置节点，后端作为落地出口。</div>
       </div>
       <label>
         <span>前置节点</span>
         <select name="front_node_id" required>
           <option value="">请选择前置节点</option>
-          {% for item in direct_nodes %}
-          <option value="{{ item['node_id'] }}" {% if form_values.get('front_node_id') == item['node_id'] %}selected{% endif %}>{{ item['name'] }} · {{ item['ip'] }}:{{ item['public_port'] }}</option>
+          {% for item in front_nodes %}
+          <option value="{{ item['node_id'] }}" {% if form_values.get('front_node_id') == item['node_id'] %}selected{% endif %}>{{ item['name'] }} · Reality · {{ item['ip'] }}:{{ item['public_port'] }}</option>
           {% endfor %}
         </select>
       </label>
@@ -61,8 +61,12 @@
         <span>后端节点</span>
         <select name="backend_node_id" required>
           <option value="">请选择后端节点</option>
-          {% for item in direct_nodes %}
-          <option value="{{ item['node_id'] }}" {% if form_values.get('backend_node_id') == item['node_id'] %}selected{% endif %}>{{ item['name'] }} · {{ item['ip'] }}:{{ item['public_port'] }}</option>
+          {% for item in backend_nodes %}
+          {% if item['protocol_type'] == protocol_tunnel %}
+          <option value="{{ item['node_id'] }}" {% if form_values.get('backend_node_id') == item['node_id'] %}selected{% endif %}>{{ item['name'] }} · tunnel · {{ item['cf_host'] }}:443</option>
+          {% else %}
+          <option value="{{ item['node_id'] }}" {% if form_values.get('backend_node_id') == item['node_id'] %}selected{% endif %}>{{ item['name'] }} · Reality · {{ item['ip'] }}:{{ item['public_port'] }}</option>
+          {% endif %}
           {% endfor %}
         </select>
       </label>
@@ -85,8 +89,8 @@
         </select>
       </label>
       <label>
-        <span>NAT IP</span>
-        <input type="text" name="ip" value="{{ form_values['ip'] }}" required>
+        <span>NAT IP / DDNS 域名</span>
+        <input type="text" name="ip" value="{{ form_values['ip'] }}" placeholder="1.2.3.4 或 hinet.example.com" required>
       </label>
       <label>
         <span>SSH 端口</span>
@@ -136,7 +140,7 @@
       </label>
       <div class="full-span">
         <div class="field-note tunnel-note">Tunnel 模式默认本机 8080；Cloudflare Zero Trust 的 Public Hostname / 应用路由需要指向该本地端口。</div>
-        <div class="field-note vless-note">留空则自动按 IP 识别；手动填写后优先使用手动值，不会被自动识别覆盖。</div>
+        <div class="field-note vless-note">VLESS 模式这里可填固定 IP 或 DDNS 域名；部署 SSH 会自动解析域名，最终 VLESS 链接仍使用你填写的域名。地区留空则自动按当前解析 IP 识别；手动填写后优先使用手动值。</div>
       </div>
       {% endif %}
     </div>

@@ -17,3 +17,9 @@ logs/*.log
 
 # Local temp files
 tmp/*.json
+
+# Local backups / runtime logs
+*.bak.*
+data/*.bak.*
+data/*.log
+PHASE4*.md

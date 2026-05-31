@@ -372,11 +372,48 @@ button[disabled], .ghost-btn[disabled], .icon-btn[disabled] {
 
 .flag-cell {
   display: inline-flex;
-  min-width: 30px;
-  font-size: 18px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 38px;
   line-height: 1;
-  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", emoji, sans-serif;
-  font-variant-emoji: emoji;
+}
+.flag-icon {
+  display: inline-block;
+  width: 24px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.16), 0 4px 12px rgba(0,0,0,.18);
+  vertical-align: middle;
+}
+.flag-arrow {
+  color: #7f8ca8;
+  font-size: 11px;
+  line-height: 1;
+}
+.flag-badge {
+  display: none;
+  min-width: 28px;
+  padding: 3px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(147, 160, 191, 0.28);
+  background: rgba(147, 160, 191, 0.10);
+  color: #d9e4ff;
+  font-family: "JetBrains Mono", "Cascadia Code", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-align: center;
+}
+.flag-cell:not(:has(.flag-icon)) .flag-badge,
+.flag-cell.flag-missing .flag-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.flag-cell.flag-missing .flag-arrow {
+  display: none;
 }
 
 .tag-toolbar {

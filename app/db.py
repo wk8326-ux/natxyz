@@ -6,6 +6,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 from .config import DATA_DIR, DB_PATH
 
@@ -183,10 +184,26 @@ def list_direct_vless_nodes() -> list[sqlite3.Row]:
             """
             SELECT * FROM nodes
             WHERE protocol_type = 'vless_reality_singbox'
+              AND TRIM(COALESCE(ip, '')) != ''
+              AND COALESCE(public_port, 0) > 0
+              AND TRIM(COALESCE(last_vless_link, '')) != ''
             ORDER BY updated_at DESC, created_at DESC
             """
         ).fetchall()
 
+
+def list_chain_backend_nodes() -> list[sqlite3.Row]:
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            SELECT * FROM nodes
+            WHERE protocol_type = 'vless_reality_singbox'
+              AND TRIM(COALESCE(ip, '')) != ''
+              AND COALESCE(public_port, 0) > 0
+              AND TRIM(COALESCE(last_vless_link, '')) != ''
+            ORDER BY updated_at DESC, created_at DESC
+            """
+        ).fetchall()
 
 
 def list_subscribable_nodes() -> list[sqlite3.Row]:
@@ -305,11 +322,11 @@ def create_node_record(payload: dict[str, Any]) -> str:
                 payload.get("chain_mode"),
                 payload["public_port"],
                 payload["listen_port"],
-                None,
-                None,
-                None,
-                None,
-                None,
+                payload.get("selected_reality_target"),
+                payload.get("generated_uuid"),
+                payload.get("generated_private_key"),
+                payload.get("generated_public_key"),
+                payload.get("generated_short_id"),
                 payload.get("last_vless_link", ""),
                 payload.get("cf_host"),
                 payload.get("cf_tunnel_token"),
@@ -378,6 +395,70 @@ def update_node_record(node_id: str, payload: dict[str, Any]) -> None:
         )
 
 
+
+def extract_vless_uuid(vless_link: str | None) -> str:
+    link = str(vless_link or "").strip()
+    if not link.startswith("vless://"):
+        return ""
+    try:
+        parsed = urlparse(link)
+    except ValueError:
+        return ""
+    return parsed.username or ""
+
+
+def rebuild_tunnel_vless_link(*, uuid_value: str, cf_host: str, ws_path: str, name: str) -> str:
+    safe_path = ws_path or "/"
+    return (
+        f"vless://{uuid_value}@{cf_host}:443"
+        f"?encryption=none&security=tls&type=ws&host={cf_host}&path={safe_path}&sni={cf_host}"
+        f"#{name}"
+    )
+
+
+def backfill_tunnel_generated_fields() -> list[dict[str, str]]:
+    updated: list[dict[str, str]] = []
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT node_id, name, cf_host, ws_path, generated_uuid, last_vless_link
+            FROM nodes
+            WHERE protocol_type = 'cf_vless_ws'
+            """
+        ).fetchall()
+        for row in rows:
+            cf_host = str(row["cf_host"] or "").strip()
+            current_uuid = str(row["generated_uuid"] or "").strip()
+            link_uuid = extract_vless_uuid(row["last_vless_link"])
+            uuid_value = current_uuid or link_uuid
+            if not (cf_host and uuid_value):
+                continue
+            last_vless_link = str(row["last_vless_link"] or "").strip()
+            if not last_vless_link:
+                last_vless_link = rebuild_tunnel_vless_link(
+                    uuid_value=uuid_value,
+                    cf_host=cf_host,
+                    ws_path=str(row["ws_path"] or "/").strip() or "/",
+                    name=str(row["name"] or row["node_id"]),
+                )
+            if current_uuid == uuid_value and str(row["last_vless_link"] or "").strip() == last_vless_link:
+                continue
+            conn.execute(
+                """
+                UPDATE nodes
+                SET generated_uuid = ?,
+                    last_vless_link = ?,
+                    updated_at = ?
+                WHERE node_id = ?
+                """,
+                (uuid_value, last_vless_link, now_iso(), row["node_id"]),
+            )
+            updated.append({
+                "node_id": row["node_id"],
+                "name": row["name"] or row["node_id"],
+                "generated_uuid": uuid_value,
+            })
+    return updated
 
 def list_tags() -> list[sqlite3.Row]:
     with get_conn() as conn:

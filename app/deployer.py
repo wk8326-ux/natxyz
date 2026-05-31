@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import shlex
+import socket
 import subprocess
 import textwrap
 import urllib.parse
@@ -51,9 +53,46 @@ class DeployResult:
     selected_reality_target: str
 
 
+def normalize_host_value(value: str) -> str:
+    value = str(value or "").strip()
+    value = value.replace("https://", "").replace("http://", "").strip().strip("/")
+    if "/" in value:
+        value = value.split("/", 1)[0]
+    if value.startswith("[") and "]" in value:
+        return value[1:value.index("]")].strip()
+    if value.count(":") == 1:
+        host_part, maybe_port = value.rsplit(":", 1)
+        if maybe_port.isdigit():
+            value = host_part
+    return value.strip().lower()
+
+
+
+def resolve_host_for_ssh(host: str) -> str:
+    host = normalize_host_value(host)
+    if not host:
+        return host
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
+    try:
+        info = socket.getaddrinfo(host, None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
+        for item in info:
+            addr = item[4][0]
+            if addr:
+                return addr
+    except socket.gaierror as exc:
+        raise DeployError("ssh_probe", f"无法解析域名 {host}: {exc}", host) from exc
+    raise DeployError("ssh_probe", f"无法解析域名 {host}", host)
+
+
+
 class RemoteExecutor:
     def __init__(self, host: str, port: int, user: str, password: str):
-        self.host = host
+        self.host = resolve_host_for_ssh(host)
+        self.original_host = host
         self.port = port
         self.user = user
         self.password = password
@@ -314,8 +353,19 @@ def build_remote_script(node: dict, *, singbox_config: str, node_meta: str, agen
         f"""\
         set -eu
         mkdir -p {shell_quote(REMOTE_BIN_DIR)} {shell_quote(REMOTE_AGENT_DIR)} {shell_quote(REMOTE_STATE_DIR)} {shell_quote(REMOTE_LOG_DIR)} {shell_quote(REMOTE_SINGBOX_DIR)} /tmp/natctl-singbox
-        if ! command -v curl >/dev/null 2>&1; then
-          apk add --no-cache curl >/dev/null
+        if command -v apk >/dev/null 2>&1; then
+          apk add --no-cache curl ca-certificates tar gzip python3 coreutils >/dev/null
+        elif command -v apt-get >/dev/null 2>&1; then
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -y >/dev/null
+          apt-get install -y curl ca-certificates tar gzip python3 coreutils >/dev/null
+        else
+          echo 'ERROR: unsupported package manager'
+          exit 1
+        fi
+        if ! command -v python3 >/dev/null 2>&1; then
+          echo 'ERROR: python3 install failed or unavailable'
+          exit 1
         fi
         if ! command -v sing-box >/dev/null 2>&1; then
           echo 'INFO: sing-box missing, downloading release package'
@@ -419,13 +469,17 @@ def build_tunnel_remote_script(
         set -eu
         mkdir -p {shell_quote(REMOTE_BIN_DIR)} {shell_quote(REMOTE_AGENT_DIR)} {shell_quote(REMOTE_STATE_DIR)} {shell_quote(REMOTE_LOG_DIR)} {shell_quote(REMOTE_SINGBOX_DIR)} /etc/cloudflared /tmp/natctl-singbox
         if command -v apk >/dev/null 2>&1; then
-          apk add --no-cache curl ca-certificates tar gzip coreutils procps >/dev/null
+          apk add --no-cache curl ca-certificates tar gzip python3 coreutils >/dev/null
         elif command -v apt-get >/dev/null 2>&1; then
           export DEBIAN_FRONTEND=noninteractive
           apt-get update -y >/dev/null
-          apt-get install -y curl ca-certificates tar gzip coreutils procps >/dev/null
+          apt-get install -y curl ca-certificates tar gzip python3 coreutils >/dev/null
         else
           echo 'ERROR: unsupported package manager'
+          exit 1
+        fi
+        if ! command -v python3 >/dev/null 2>&1; then
+          echo 'ERROR: python3 install failed or unavailable'
           exit 1
         fi
         arch=$(uname -m)
@@ -498,8 +552,11 @@ PYEOF
 
 
 def build_vless_link(node: dict, *, generated_uuid: str, generated_public_key: str, generated_short_id: str, selected_reality_target: str) -> str:
+    public_host = normalize_host_value(str(node.get("ip") or ""))
+    if not public_host:
+        public_host = str(node.get("ip") or "").strip()
     return (
-        f"vless://{generated_uuid}@{node['ip']}:{node['public_port']}"
+        f"vless://{generated_uuid}@{public_host}:{node['public_port']}"
         f"?security=reality&sni={selected_reality_target}&pbk={generated_public_key}"
         f"&sid={generated_short_id}&type=tcp&flow=xtls-rprx-vision#{node['name']}"
     )

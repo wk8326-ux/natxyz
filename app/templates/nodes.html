@@ -80,7 +80,13 @@
             {% endif %}
           </td>
           <td>
-            <span class="flag-cell" title="{{ node.region_label }}" data-region-code="{{ node.region_code }}">{{ node.region_flag or '—' }}</span>
+            <span class="flag-cell" title="{{ node.region_label }}" data-region-code="{{ node.region_code }}" data-region-badge="{{ node.region_badge }}">
+              {% for flag_code in node.region_flag_codes %}
+                <img class="flag-icon" src="/static/flags/{{ flag_code }}.svg" alt="{{ flag_code | upper }}" loading="lazy" onerror="this.remove(); this.closest('.flag-cell').classList.add('flag-missing')">
+                {% if not loop.last %}<span class="flag-arrow">→</span>{% endif %}
+              {% endfor %}
+              <span class="flag-badge">{{ node.region_badge or node.region_code or '—' }}</span>
+            </span>
           </td>
           <td><span class="badge proto">{{ node.protocol_label }}</span></td>
           <td><span class="badge {{ node.badge_class }}">{{ node.badge_text }}</span></td>
