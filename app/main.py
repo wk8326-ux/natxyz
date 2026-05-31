@@ -47,7 +47,7 @@ from .db import (
     validate_subscription_token,
 )
 from .jobs import is_deploy_running, submit_reinstall_job
-from .link_labels import country_code_to_flag, replace_vless_fragment, vless_remark_for_node
+from .regions import country_code_to_badge, country_code_to_flag, lookup_region_by_host, region_from_node, replace_vless_fragment, vless_remark_for_node
 
 app = FastAPI(title=APP_NAME)
 app.add_middleware(
@@ -379,10 +379,8 @@ def protocol_label(protocol_type: object) -> str:
 
 
 def country_code_to_badge(country_code: str) -> str:
-    code = country_code.strip().upper()
-    if len(code) != 2 or not code.isalpha():
-        return ""
-    return code
+    from .regions import country_code_to_badge as _country_code_to_badge
+    return _country_code_to_badge(country_code)
 
 
 COUNTRY_NAME_MAP = {
@@ -395,55 +393,10 @@ COUNTRY_NAME_MAP = {
     "TR": "土耳其",
     "AU": "澳洲",
     "CN": "中国",
+    "MY": "马来西亚",
+    "DE": "德国",
+    "GB": "英国",
 }
-
-
-def manual_region_from_node(node) -> dict[str, str] | None:
-    code = str(node["manual_country_code"] or "").strip().upper() if "manual_country_code" in node.keys() else ""
-    label = str(node["manual_region_label"] or "").strip() if "manual_region_label" in node.keys() else ""
-    if not code and not label:
-        return None
-    return {"code": code, "flag": country_code_to_flag(code) if code else "📍", "badge": country_code_to_badge(code), "flag_codes": [code.lower()] if code else [], "label": label or COUNTRY_NAME_MAP.get(code, code)}
-
-
-def resolve_host_for_display_lookup(host: str) -> str:
-    host = normalize_host_value(host)
-    if not host:
-        return ""
-    try:
-        ipaddress.ip_address(host)
-        return host
-    except ValueError:
-        pass
-    try:
-        import socket
-        info = socket.getaddrinfo(host, None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
-        for item in info:
-            addr = item[4][0]
-            if addr:
-                return addr
-    except Exception:
-        return host
-    return host
-
-
-
-def lookup_ip_region(ip: str) -> dict[str, str]:
-    ip = resolve_host_for_display_lookup(str(ip or "").strip())
-    if not ip:
-        return {"flag": "", "label": ""}
-    try:
-        import urllib.request
-        with urllib.request.urlopen(f"http://ip-api.com/json/{urllib.parse.quote(ip)}?fields=status,countryCode,country,regionName", timeout=1.6) as resp:
-            data = json.loads(resp.read().decode("utf-8", "ignore"))
-        if data.get("status") == "success" and data.get("countryCode"):
-            code = str(data.get("countryCode") or "").upper()
-            region = str(data.get("regionName") or "").strip()
-            country = COUNTRY_NAME_MAP.get(code, str(data.get("country") or code))
-            return {"code": code, "flag": country_code_to_flag(code), "badge": country_code_to_badge(code), "flag_codes": [code.lower()], "label": f"{country} {region}".strip()}
-    except Exception:
-        pass
-    return {"code": "", "flag": "🌐", "badge": "IP", "flag_codes": [], "label": ip}
 
 
 def render_node_form(
@@ -565,11 +518,11 @@ def display_protocol_label(protocol_type: str | None) -> str:
     return "vless"
 
 
-def vless_link_with_node_remark(link: str, node: sqlite3.Row | dict[str, object]) -> str:
-    return replace_vless_fragment(link, vless_remark_for_node(node, allow_lookup=True))
+def vless_link_with_node_remark(link: str, node: sqlite3.Row | dict[str, object], *, region_source_node: sqlite3.Row | dict[str, object] | None = None) -> str:
+    return replace_vless_fragment(link, vless_remark_for_node(node, allow_lookup=True, region_source_node=region_source_node))
 
 
-def build_tunnel_vless_link(node: sqlite3.Row | dict[str, object], *, generated_uuid: str | None = None) -> str:
+def build_tunnel_vless_link(node: sqlite3.Row | dict[str, object], *, generated_uuid: str | None = None, region_source_node: sqlite3.Row | dict[str, object] | None = None) -> str:
     cf_host = str(node["cf_host"] or "").strip().strip("/")
     if not cf_host:
         return ""
@@ -579,7 +532,7 @@ def build_tunnel_vless_link(node: sqlite3.Row | dict[str, object], *, generated_
     ws_path = str(node["ws_path"] or "/").strip() or "/"
     if not ws_path.startswith("/"):
         ws_path = f"/{ws_path}"
-    name = urllib.parse.quote(vless_remark_for_node(node, allow_lookup=True), safe="")
+    name = urllib.parse.quote(vless_remark_for_node(node, allow_lookup=True, region_source_node=region_source_node), safe="")
     query = urllib.parse.urlencode(
         {
             "encryption": "none",
@@ -593,17 +546,22 @@ def build_tunnel_vless_link(node: sqlite3.Row | dict[str, object], *, generated_
     return f"vless://{uuid_value}@{cf_host}:443?{query}#{name}"
 
 
-def display_vless_link_for_node(node: sqlite3.Row | dict[str, object]) -> str:
+def display_vless_link_for_node(node: sqlite3.Row | dict[str, object], node_by_id: dict[str, sqlite3.Row | dict[str, object]] | None = None) -> str:
+    region_source_node = None
+    if str(node["protocol_type"] or "") == PROTOCOL_CHAIN and node_by_id:
+        region_source_node = node_by_id.get(str(node["backend_node_id"] or ""))
     if is_tunnel_protocol(str(node["protocol_type"] or "")):
-        link = build_tunnel_vless_link(node)
+        link = build_tunnel_vless_link(node, region_source_node=region_source_node)
         if link:
             return link
-    return vless_link_with_node_remark(str(node["last_vless_link"] or ""), node)
+    return vless_link_with_node_remark(str(node["last_vless_link"] or ""), node, region_source_node=region_source_node)
 
 def build_subscription_payload() -> str:
+    nodes = list_subscribable_nodes()
+    node_by_id = {node["node_id"]: node for node in nodes}
     links = []
-    for node in list_subscribable_nodes():
-        link = display_vless_link_for_node(node).strip()
+    for node in nodes:
+        link = display_vless_link_for_node(node, node_by_id).strip()
         if link:
             links.append(link)
     plain = "\n".join(links)
@@ -650,10 +608,12 @@ def _vless_link_to_clash_proxy(link: str) -> dict[str, object] | None:
 
 
 def build_clash_subscription_payload() -> str:
+    nodes = list_subscribable_nodes()
+    node_by_id = {node["node_id"]: node for node in nodes}
     proxies = []
     seen_names: set[str] = set()
-    for node in list_subscribable_nodes():
-        link = display_vless_link_for_node(node).strip()
+    for node in nodes:
+        link = display_vless_link_for_node(node, node_by_id).strip()
         if not link:
             continue
         proxy = _vless_link_to_clash_proxy(link)
@@ -695,22 +655,12 @@ async def nodes_page(request: Request):
     for node in raw_nodes:
         badge_class, badge_text = compute_effective_badge(node, node_by_id)
         if node["protocol_type"] == PROTOCOL_CHAIN:
-            front = node_by_id.get(node["front_node_id"])
             backend = node_by_id.get(node["backend_node_id"])
-            front_region = manual_region_from_node(front) if front else None
-            if not front_region:
-                front_region = region_cache.setdefault(f"node:{node['front_node_id']}", lookup_ip_region(front["ip"] if front else ""))
-            backend_region = manual_region_from_node(backend) if backend else None
-            if not backend_region:
-                backend_region = region_cache.setdefault(f"node:{node['backend_node_id']}", lookup_ip_region(backend["ip"] if backend else ""))
-            front_badge = front_region.get("badge") or front_region.get("code") or "--"
-            backend_badge = backend_region.get("badge") or backend_region.get("code") or "--"
-            front_flag_codes = front_region.get("flag_codes") or ([str(front_region.get("code", "")).lower()] if front_region.get("code") else [])
-            backend_flag_codes = backend_region.get("flag_codes") or ([str(backend_region.get("code", "")).lower()] if backend_region.get("code") else [])
-            region = {"code": "", "flag": f"{front_region.get('flag', '')}{backend_region.get('flag', '')}", "badge": f"{front_badge}→{backend_badge}", "flag_codes": front_flag_codes + backend_flag_codes, "label": "链式节点"}
+            region = region_from_node(backend, allow_lookup=True) if backend else {"code": "", "flag": "🌐", "badge": "IP", "flag_codes": [], "label": "落地端未知"}
+            if region.get("label"):
+                region = {**region, "label": f"落地端：{region.get('label')}"}
         else:
-            manual_region = manual_region_from_node(node)
-            region = manual_region or region_cache.setdefault(node["ip"], lookup_ip_region(node["ip"]))
+            region = region_from_node(node, allow_lookup=True)
         nodes.append({
             "node_id": node["node_id"],
             "name": node["name"],
@@ -728,7 +678,7 @@ async def nodes_page(request: Request):
             "backend_node_name": node["backend_node_name"],
             "badge_class": badge_class,
             "badge_text": badge_text,
-            "last_vless_link": display_vless_link_for_node(node),
+            "last_vless_link": display_vless_link_for_node(node, node_by_id),
             "tags": tag_map.get(node["node_id"], []),
             "can_reinstall": True,
             "is_chain": bool(node["protocol_type"] == PROTOCOL_CHAIN),
@@ -1062,7 +1012,7 @@ async def node_detail_page(request: Request, node_id: str):
             "request": request,
             "title": node["name"],
             "node": node,
-            "display_vless_link": display_vless_link_for_node(node),
+            "display_vless_link": display_vless_link_for_node(node, node_by_id),
             "deployments": deployments,
             "badge_class": badge_class,
             "badge_text": badge_text,

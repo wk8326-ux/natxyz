@@ -13,7 +13,7 @@ from app import jobs, main
 from app.chain_deployer import build_front_chain_config
 from app.deployer import build_vless_link, resolve_host_for_ssh
 from app.db import create_node_record, get_node, init_db, list_chain_backend_nodes, list_direct_vless_nodes, list_nodes
-from app.main import app
+from app.main import app, build_subscription_payload, display_vless_link_for_node
 from app.link_labels import replace_vless_fragment, vless_remark_for_node
 
 init_db()
@@ -255,6 +255,56 @@ def test_replace_vless_fragment_keeps_flag_when_node_name_changes() -> None:
 def test_vless_remark_can_infer_country_from_node_name() -> None:
     node = {"name": "风见香港02", "manual_country_code": "", "manual_region_label": "", "country_code": ""}
     assert vless_remark_for_node(node) == "🇭🇰 风见香港02"
+
+
+def test_chain_display_link_uses_backend_country_flag() -> None:
+    front_id = create_node_record(
+        {
+            "name": "香港入口",
+            "ip": "198.51.100.81",
+            "ssh_port": 2281,
+            "ssh_user": "root",
+            "ssh_password": "front-pass",
+            "public_port": 443,
+            "listen_port": 443,
+            "protocol_type": "vless_reality_singbox",
+            "manual_country_code": "HK",
+            "last_vless_link": "vless://11111111-1111-1111-1111-111111111111@198.51.100.81:443?security=reality&type=tcp#香港入口",
+        }
+    )
+    backend_id = create_node_record(
+        {
+            "name": "美国落地",
+            "ip": "198.51.100.82",
+            "ssh_port": 2282,
+            "ssh_user": "root",
+            "ssh_password": "backend-pass",
+            "public_port": 443,
+            "listen_port": 443,
+            "protocol_type": "vless_reality_singbox",
+            "manual_country_code": "US",
+            "last_vless_link": "vless://22222222-2222-2222-2222-222222222222@198.51.100.82:443?security=reality&type=tcp#美国落地",
+        }
+    )
+    chain_id = create_node_record(
+        {
+            "name": "香港拉美国",
+            "ip": "198.51.100.81",
+            "ssh_port": 2281,
+            "ssh_user": "root",
+            "ssh_password": "front-pass",
+            "public_port": 443,
+            "listen_port": 443,
+            "protocol_type": "vless_chain",
+            "front_node_id": front_id,
+            "backend_node_id": backend_id,
+            "last_vless_link": "vless://33333333-3333-3333-3333-333333333333@198.51.100.81:443?security=reality&type=tcp#香港拉美国",
+        }
+    )
+    nodes = {node["node_id"]: node for node in list_nodes()}
+    decoded = urllib.parse.unquote(display_vless_link_for_node(nodes[chain_id], nodes))
+    assert "#🇺🇸 香港拉美国" in decoded
+    assert "#🇭🇰 香港拉美国" not in decoded
 
 
 def test_vless_remark_falls_back_to_auto_country_code() -> None:

@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .config import DATA_DIR, DB_PATH
-from .link_labels import replace_vless_fragment
+from .regions import replace_vless_fragment
 
 
 NODE_SCHEMA = """

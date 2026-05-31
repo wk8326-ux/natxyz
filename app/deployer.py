@@ -17,7 +17,7 @@ from typing import Any
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 from .config import AGENT_REPORT_PATH, APP_DIR
-from .link_labels import replace_vless_fragment, vless_remark_for_node
+from .regions import replace_vless_fragment, vless_remark_for_node
 
 REMOTE_APP_DIR = "/opt/natctl"
 REMOTE_BIN_DIR = f"{REMOTE_APP_DIR}/bin"
