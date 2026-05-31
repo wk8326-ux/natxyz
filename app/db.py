@@ -345,6 +345,16 @@ def create_node_record(payload: dict[str, Any]) -> str:
 
 
 
+def rename_node_record(node_id: str, name: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE nodes SET name = ?, updated_at = ? WHERE node_id = ?",
+            (name, now_iso(), node_id),
+        )
+        return cur.rowcount > 0
+
+
+
 def update_node_record(node_id: str, payload: dict[str, Any]) -> None:
     with get_conn() as conn:
         conn.execute(

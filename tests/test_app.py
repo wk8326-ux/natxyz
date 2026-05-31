@@ -413,6 +413,45 @@ def test_create_chain_node_record_preserves_front_and_backend_references() -> No
     assert listed[chain_id]["backend_node_name"] == "BACKEND_FOR_CHAIN"
 
 
+def test_inline_rename_only_updates_node_name() -> None:
+    login()
+    node_id = create_node_record(
+        {
+            "name": "INLINE_OLD_NAME",
+            "ip": "198.51.100.71",
+            "ssh_port": 2271,
+            "ssh_user": "root",
+            "ssh_password": "keep-pass",
+            "public_port": 443,
+            "listen_port": 443,
+            "protocol_type": "vless_reality_singbox",
+            "manual_country_code": "US",
+            "last_vless_link": "vless://11111111-1111-1111-1111-111111111111@198.51.100.71:443?security=reality&type=tcp#INLINE_OLD_NAME",
+        }
+    )
+    before = dict(get_node(node_id))
+    response = client.post(
+        f"/nodes/{node_id}/rename",
+        data={"name": "INLINE_NEW_NAME"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/nodes"
+    after = dict(get_node(node_id))
+    assert after["name"] == "INLINE_NEW_NAME"
+    for field in ["ip", "ssh_port", "ssh_user", "ssh_password", "protocol_type", "public_port", "listen_port", "manual_country_code", "last_vless_link"]:
+        assert after[field] == before[field]
+
+    empty_response = client.post(
+        f"/nodes/{node_id}/rename",
+        data={"name": "   "},
+        follow_redirects=False,
+    )
+    assert empty_response.status_code == 303
+    assert dict(get_node(node_id))["name"] == "INLINE_NEW_NAME"
+
+
+
 def test_renamed_node_updates_export_and_subscription_link_name() -> None:
     login()
     node_id = create_node_record(

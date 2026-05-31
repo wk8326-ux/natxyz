@@ -41,6 +41,7 @@ from .db import (
     list_subscribable_nodes,
     list_tags,
     mark_node_deployed_from_report,
+    rename_node_record,
     set_node_tags,
     create_tag,
     update_node_record,
@@ -1150,6 +1151,15 @@ async def tag_create_submit(request: Request, name: str = Form(...), color: str 
 @login_required
 async def tag_delete_submit(request: Request, tag_id: str):
     delete_tag(tag_id)
+    return RedirectResponse(url="/nodes", status_code=303)
+
+
+@app.post("/nodes/{node_id}/rename")
+@login_required
+async def node_rename_submit(request: Request, node_id: str, name: str = Form(...)):
+    new_name = name.strip()
+    if get_node(node_id) and new_name:
+        rename_node_record(node_id, new_name[:80])
     return RedirectResponse(url="/nodes", status_code=303)
 
 

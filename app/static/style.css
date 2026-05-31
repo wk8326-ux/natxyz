@@ -264,6 +264,64 @@ button[disabled], .ghost-btn[disabled], .icon-btn[disabled] {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  position: relative;
+}
+
+.name-inline-editor {
+  position: relative;
+  display: inline-flex;
+}
+
+.name-inline-editor summary {
+  list-style: none;
+}
+
+.name-inline-editor summary::-webkit-details-marker {
+  display: none;
+}
+
+.name-edit-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,0.03);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.name-edit-trigger:hover {
+  color: var(--text);
+  background: rgba(255,255,255,0.07);
+}
+
+.name-edit-form {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  top: 28px;
+  display: none;
+  align-items: center;
+  gap: 8px;
+  min-width: 320px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #101827;
+  box-shadow: 0 12px 36px rgba(0,0,0,0.28);
+}
+
+.name-inline-editor[open] .name-edit-form {
+  display: inline-flex;
+}
+
+.name-edit-form input {
+  min-width: 170px;
+  height: 30px;
 }
 
 .node-kind-icon {

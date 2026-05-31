@@ -66,6 +66,14 @@
         <tr>
           <td>
             <div class="node-name-cell">
+              <details class="name-inline-editor">
+                <summary class="name-edit-trigger" title="编辑节点名" aria-label="编辑节点名">✎</summary>
+                <form method="post" action="/nodes/{{ node.node_id }}/rename" class="name-edit-form">
+                  <input type="text" name="name" value="{{ node.name }}" maxlength="80" required>
+                  <button class="small-btn" type="submit">保存</button>
+                  <span class="muted-small">点外面取消</span>
+                </form>
+              </details>
               <span>{{ node.name }}</span>
               {% if node.get('is_chain') %}
               <span class="node-kind-icon" title="链式节点" aria-label="链式节点">⛓</span>
