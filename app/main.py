@@ -47,6 +47,7 @@ from .db import (
     validate_subscription_token,
 )
 from .jobs import is_deploy_running, submit_reinstall_job
+from .link_labels import country_code_to_flag, replace_vless_fragment, vless_remark_for_node
 
 app = FastAPI(title=APP_NAME)
 app.add_middleware(
@@ -377,13 +378,6 @@ def protocol_label(protocol_type: object) -> str:
     return mapping.get(str(protocol_type or ""), str(protocol_type or "-"))
 
 
-def country_code_to_flag(country_code: str) -> str:
-    code = country_code.strip().upper()
-    if len(code) != 2 or not code.isalpha():
-        return ""
-    return "".join(chr(127397 + ord(ch)) for ch in code)
-
-
 def country_code_to_badge(country_code: str) -> str:
     code = country_code.strip().upper()
     if len(code) != 2 or not code.isalpha():
@@ -571,26 +565,8 @@ def display_protocol_label(protocol_type: str | None) -> str:
     return "vless"
 
 
-def vless_link_with_name(link: str, name: str) -> str:
-    link = (link or "").strip()
-    name = (name or "").strip()
-    if not link or not name:
-        return link
-    try:
-        parsed = urllib.parse.urlparse(link)
-    except ValueError:
-        return link
-    if parsed.scheme != "vless":
-        return link
-    quoted_name = urllib.parse.quote(name, safe="")
-    return urllib.parse.urlunparse((
-        parsed.scheme,
-        parsed.netloc,
-        parsed.path,
-        parsed.params,
-        parsed.query,
-        quoted_name,
-    ))
+def vless_link_with_node_remark(link: str, node: sqlite3.Row | dict[str, object]) -> str:
+    return replace_vless_fragment(link, vless_remark_for_node(node))
 
 
 def build_tunnel_vless_link(node: sqlite3.Row | dict[str, object], *, generated_uuid: str | None = None) -> str:
@@ -603,7 +579,7 @@ def build_tunnel_vless_link(node: sqlite3.Row | dict[str, object], *, generated_
     ws_path = str(node["ws_path"] or "/").strip() or "/"
     if not ws_path.startswith("/"):
         ws_path = f"/{ws_path}"
-    name = urllib.parse.quote(str(node["name"] or "").strip(), safe="")
+    name = urllib.parse.quote(vless_remark_for_node(node), safe="")
     query = urllib.parse.urlencode(
         {
             "encryption": "none",
@@ -622,7 +598,7 @@ def display_vless_link_for_node(node: sqlite3.Row | dict[str, object]) -> str:
         link = build_tunnel_vless_link(node)
         if link:
             return link
-    return vless_link_with_name(str(node["last_vless_link"] or ""), str(node["name"] or ""))
+    return vless_link_with_node_remark(str(node["last_vless_link"] or ""), node)
 
 def build_subscription_payload() -> str:
     links = []
@@ -1200,7 +1176,9 @@ async def node_edit_submit(
         existing.update(payload)
         payload["last_vless_link"] = build_tunnel_vless_link(existing) or str(node["last_vless_link"] or "")
     else:
-        payload["last_vless_link"] = vless_link_with_name(str(node["last_vless_link"] or ""), str(payload.get("name") or ""))
+        existing = dict(node)
+        existing.update(payload)
+        payload["last_vless_link"] = vless_link_with_node_remark(str(node["last_vless_link"] or ""), existing)
     update_node_record(node_id, payload)
     return RedirectResponse(url=f"/nodes/{node_id}", status_code=303)
 

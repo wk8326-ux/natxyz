@@ -17,6 +17,7 @@ from typing import Any
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 from .config import AGENT_REPORT_PATH, APP_DIR
+from .link_labels import replace_vless_fragment, vless_remark_for_node
 
 REMOTE_APP_DIR = "/opt/natctl"
 REMOTE_BIN_DIR = f"{REMOTE_APP_DIR}/bin"
@@ -255,7 +256,7 @@ def build_tunnel_vless_link(node: dict, *, generated_uuid: str) -> str:
     ws_path = str(node.get("ws_path") or "/").strip() or "/"
     if not ws_path.startswith("/"):
         ws_path = f"/{ws_path}"
-    name = urllib.parse.quote(str(node.get("name") or "tunnel").strip(), safe="")
+    name = urllib.parse.quote(vless_remark_for_node(node, "tunnel"), safe="")
     query = urllib.parse.urlencode(
         {
             "encryption": "none",
@@ -555,10 +556,13 @@ def build_vless_link(node: dict, *, generated_uuid: str, generated_public_key: s
     public_host = normalize_host_value(str(node.get("ip") or ""))
     if not public_host:
         public_host = str(node.get("ip") or "").strip()
-    return (
-        f"vless://{generated_uuid}@{public_host}:{node['public_port']}"
-        f"?security=reality&sni={selected_reality_target}&pbk={generated_public_key}"
-        f"&sid={generated_short_id}&type=tcp&flow=xtls-rprx-vision#{node['name']}"
+    return replace_vless_fragment(
+        (
+            f"vless://{generated_uuid}@{public_host}:{node['public_port']}"
+            f"?security=reality&sni={selected_reality_target}&pbk={generated_public_key}"
+            f"&sid={generated_short_id}&type=tcp&flow=xtls-rprx-vision"
+        ),
+        vless_remark_for_node(node),
     )
 
 

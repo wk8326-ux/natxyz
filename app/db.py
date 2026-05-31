@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .config import DATA_DIR, DB_PATH
+from .link_labels import replace_vless_fragment
 
 
 NODE_SCHEMA = """
@@ -409,10 +410,10 @@ def extract_vless_uuid(vless_link: str | None) -> str:
 
 def rebuild_tunnel_vless_link(*, uuid_value: str, cf_host: str, ws_path: str, name: str) -> str:
     safe_path = ws_path or "/"
-    return (
+    return replace_vless_fragment(
         f"vless://{uuid_value}@{cf_host}:443"
-        f"?encryption=none&security=tls&type=ws&host={cf_host}&path={safe_path}&sni={cf_host}"
-        f"#{name}"
+        f"?encryption=none&security=tls&type=ws&host={cf_host}&path={safe_path}&sni={cf_host}",
+        name,
     )
 
 

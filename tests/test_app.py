@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import urllib.parse
 import uuid
 
 import pytest
@@ -13,6 +14,7 @@ from app.chain_deployer import build_front_chain_config
 from app.deployer import build_vless_link, resolve_host_for_ssh
 from app.db import create_node_record, get_node, init_db, list_chain_backend_nodes, list_direct_vless_nodes, list_nodes
 from app.main import app
+from app.link_labels import replace_vless_fragment, vless_remark_for_node
 
 init_db()
 
@@ -222,6 +224,42 @@ def test_create_node_accepts_ddns_domain_as_ip_field_and_preserves_link_host() -
         selected_reality_target="www.microsoft.com",
     )
     assert "@hinet.example.com:20282" in link
+
+
+def test_vless_link_remark_uses_manual_country_flag() -> None:
+    node = {
+        "name": "hinet-lazy",
+        "ip": "hinet.example.com",
+        "public_port": 20282,
+        "manual_country_code": "TW",
+        "manual_region_label": "",
+        "country_code": "US",
+    }
+    link = build_vless_link(
+        node,
+        generated_uuid="11111111-1111-1111-1111-111111111111",
+        generated_public_key="pubkey",
+        generated_short_id="abcd",
+        selected_reality_target="www.microsoft.com",
+    )
+    assert urllib.parse.unquote(urllib.parse.urlparse(link).fragment) == "🇹🇼 hinet-lazy"
+
+
+def test_replace_vless_fragment_keeps_flag_when_node_name_changes() -> None:
+    old_link = "vless://uuid@example.com:443?security=reality#old-name"
+    node = {"name": "new-name", "manual_country_code": "JP", "manual_region_label": "", "country_code": ""}
+    new_link = replace_vless_fragment(old_link, vless_remark_for_node(node))
+    assert urllib.parse.unquote(urllib.parse.urlparse(new_link).fragment) == "🇯🇵 new-name"
+
+
+def test_vless_remark_falls_back_to_auto_country_code() -> None:
+    node = {"name": "auto-node", "manual_country_code": "", "manual_region_label": "", "country_code": "US"}
+    assert vless_remark_for_node(node) == "🇺🇸 auto-node"
+
+
+def test_vless_remark_without_country_stays_name_only() -> None:
+    node = {"name": "plain-node", "manual_country_code": "", "manual_region_label": "", "country_code": ""}
+    assert vless_remark_for_node(node) == "plain-node"
 
 
 def test_resolve_host_for_ssh_resolves_domain_but_keeps_ip_literal(monkeypatch) -> None:
