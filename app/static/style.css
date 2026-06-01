@@ -267,61 +267,68 @@ button[disabled], .ghost-btn[disabled], .icon-btn[disabled] {
   position: relative;
 }
 
-.name-inline-editor {
-  position: relative;
+.name-inline-form {
   display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
-.name-inline-editor summary {
-  list-style: none;
+.node-name-text {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.name-inline-editor summary::-webkit-details-marker {
+.node-name-input {
   display: none;
+  width: min(220px, 28vw);
+  height: 28px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(76, 141, 255, 0.45);
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+  font-size: 13px;
 }
 
-.name-edit-trigger {
+.name-edit-trigger,
+.name-save-trigger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 22px;
   height: 22px;
   border-radius: 7px;
-  border: 1px solid var(--line);
-  background: rgba(255,255,255,0.03);
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--muted);
   cursor: pointer;
   font-size: 12px;
+  padding: 0;
 }
 
-.name-edit-trigger:hover {
+.name-edit-trigger:hover,
+.name-save-trigger:hover {
   color: var(--text);
-  background: rgba(255,255,255,0.07);
+  background: rgba(255,255,255,0.06);
+  border-color: var(--line);
 }
 
-.name-edit-form {
-  position: absolute;
-  z-index: 20;
-  left: 0;
-  top: 28px;
+.name-save-trigger {
   display: none;
-  align-items: center;
-  gap: 8px;
-  min-width: 320px;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #101827;
-  box-shadow: 0 12px 36px rgba(0,0,0,0.28);
+  color: #8bf0c2;
 }
 
-.name-inline-editor[open] .name-edit-form {
+.name-inline-form.is-editing .node-name-text,
+.name-inline-form.is-editing .name-edit-trigger {
+  display: none;
+}
+
+.name-inline-form.is-editing .node-name-input,
+.name-inline-form.is-editing .name-save-trigger {
   display: inline-flex;
-}
-
-.name-edit-form input {
-  min-width: 170px;
-  height: 30px;
 }
 
 .node-kind-icon {

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ title }} - NAT WebUI</title>
-  <link rel="stylesheet" href="/static/style.css?v=202605310904">
+  <link rel="stylesheet" href="/static/style.css?v=202606010005">
 </head>
 <body>
   <div class="shell">
@@ -60,6 +60,28 @@
         }
       }
     }
+    document.addEventListener('click', (event) => {
+      const editButton = event.target.closest('.name-edit-trigger');
+      if (!editButton) return;
+      const form = editButton.closest('.name-inline-form');
+      const input = form ? form.querySelector('.node-name-input') : null;
+      if (!form || !input) return;
+      form.classList.add('is-editing');
+      input.focus();
+      input.select();
+    });
+
+    document.addEventListener('keydown', (event) => {
+      const input = event.target.closest('.node-name-input');
+      if (!input) return;
+      if (event.key === 'Escape') {
+        const form = input.closest('.name-inline-form');
+        if (!form) return;
+        input.value = form.dataset.originalName || input.defaultValue || '';
+        form.classList.remove('is-editing');
+        event.preventDefault();
+      }
+    });
   </script>
 </body>
 </html>
