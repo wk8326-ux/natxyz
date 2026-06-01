@@ -49,21 +49,23 @@
 
   {% if nodes %}
   <div class="node-table-wrap">
-    <table class="node-table">
+    <table class="node-table sortable-table" data-sortable-table>
       <thead>
         <tr>
-          <th>节点名</th>
-          <th>入口 / IP</th>
-          <th>地区</th>
-          <th>协议</th>
-          <th>状态</th>
-          <th>标签</th>
+          <th><button class="sort-header" type="button" data-sort-key="name">节点名<span class="sort-arrow"></span></button></th>
+          <th><button class="sort-header" type="button" data-sort-key="entry">入口 / IP<span class="sort-arrow"></span></button></th>
+          <th><button class="sort-header" type="button" data-sort-key="region">地区<span class="sort-arrow"></span></button></th>
+          <th><button class="sort-header" type="button" data-sort-key="protocol">协议<span class="sort-arrow"></span></button></th>
+          <th><button class="sort-header" type="button" data-sort-key="status">状态<span class="sort-arrow"></span></button></th>
+          <th><button class="sort-header" type="button" data-sort-key="tags">标签<span class="sort-arrow"></span></button></th>
           <th>操作</th>
         </tr>
       </thead>
       <tbody>
         {% for node in nodes %}
-        <tr>
+        {% set entry_text = (node.front_node_name or node.front_node_id) ~ ' → ' ~ (node.backend_node_name or node.backend_node_id) if node.get('is_chain') else node.ip %}
+        {% set tags_text = node.tags | map(attribute='name') | join(' ') %}
+        <tr data-sort-name="{{ node.name }}" data-sort-entry="{{ entry_text }}" data-sort-region="{{ node.region_badge or node.region_code or node.region_label or '' }}" data-sort-protocol="{{ node.protocol_label }}" data-sort-status="{{ node.badge_text }}" data-sort-tags="{{ tags_text }}">
           <td>
             <div class="node-name-cell">
               <form method="post" action="/nodes/{{ node.node_id }}/rename" class="name-inline-form" data-original-name="{{ node.name }}">

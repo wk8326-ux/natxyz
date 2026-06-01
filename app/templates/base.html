@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ title }} - NAT WebUI</title>
-  <link rel="stylesheet" href="/static/style.css?v=202606010005">
+  <link rel="stylesheet" href="/static/style.css?v=202606010030">
 </head>
 <body>
   <div class="shell">
@@ -60,6 +60,36 @@
         }
       }
     }
+    document.addEventListener('click', (event) => {
+      const sortButton = event.target.closest('.sort-header');
+      if (!sortButton) return;
+      const table = sortButton.closest('[data-sortable-table]');
+      if (!table) return;
+      const key = sortButton.dataset.sortKey;
+      const tbody = table.querySelector('tbody');
+      if (!key || !tbody) return;
+      const currentKey = table.dataset.sortKey || '';
+      const currentDir = table.dataset.sortDir || 'asc';
+      const nextDir = currentKey === key && currentDir === 'asc' ? 'desc' : 'asc';
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
+      rows.sort((a, b) => {
+        const av = (a.dataset[`sort${key.charAt(0).toUpperCase()}${key.slice(1)}`] || '').trim();
+        const bv = (b.dataset[`sort${key.charAt(0).toUpperCase()}${key.slice(1)}`] || '').trim();
+        const result = collator.compare(av, bv);
+        return nextDir === 'asc' ? result : -result;
+      });
+      rows.forEach(row => tbody.appendChild(row));
+      table.dataset.sortKey = key;
+      table.dataset.sortDir = nextDir;
+      table.querySelectorAll('.sort-header').forEach(button => {
+        button.classList.toggle('is-active', button === sortButton);
+        button.dataset.sortDir = button === sortButton ? nextDir : '';
+        const arrow = button.querySelector('.sort-arrow');
+        if (arrow) arrow.textContent = button === sortButton ? (nextDir === 'asc' ? '↑' : '↓') : '';
+      });
+    });
+
     document.addEventListener('click', (event) => {
       const editButton = event.target.closest('.name-edit-trigger');
       if (!editButton) return;
