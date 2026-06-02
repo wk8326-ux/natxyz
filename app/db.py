@@ -181,15 +181,18 @@ def list_direct_vless_nodes() -> list[sqlite3.Row]:
 
 
 
-def list_subscribable_nodes() -> list[sqlite3.Row]:
+def list_subscribable_nodes(protocol_type: str | None = None) -> list[sqlite3.Row]:
+    query = """
+        SELECT * FROM nodes
+        WHERE TRIM(COALESCE(last_vless_link, '')) != ''
+    """
+    params: list[Any] = []
+    if protocol_type:
+        query += " AND protocol_type = ?"
+        params.append(protocol_type)
+    query += " ORDER BY updated_at DESC, created_at DESC"
     with get_conn() as conn:
-        return conn.execute(
-            """
-            SELECT * FROM nodes
-            WHERE TRIM(COALESCE(last_vless_link, '')) != ''
-            ORDER BY updated_at DESC, created_at DESC
-            """
-        ).fetchall()
+        return conn.execute(query, tuple(params)).fetchall()
 
 
 

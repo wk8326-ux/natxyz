@@ -423,14 +423,32 @@ def build_install_command(node: dict | object) -> str:
 
 
 
-def build_subscription_url(request: Request) -> str:
-    token = get_or_create_subscription_token()
-    return str(request.url_for("subscription_feed", token=token))
+SUBSCRIPTION_SCOPES = {
+    "all": None,
+    "direct": PROTOCOL_DIRECT,
+    "chain": PROTOCOL_CHAIN,
+}
 
 
-def build_clash_subscription_url(request: Request) -> str:
+def normalize_subscription_scope(scope: str | None) -> str:
+    scope = (scope or "all").strip().lower()
+    return scope if scope in SUBSCRIPTION_SCOPES else "all"
+
+
+def subscription_filename(scope: str, kind: str) -> str:
+    prefix = "nat" if scope == "all" else f"nat-{scope}"
+    suffix = "clash.yaml" if kind == "clash" else "subscription.txt"
+    return f"{prefix}-{suffix}"
+
+
+def build_subscription_url(request: Request, scope: str = "all") -> str:
     token = get_or_create_subscription_token()
-    return str(request.url_for("clash_subscription_feed", token=token))
+    return str(request.url_for("subscription_feed", token=token).include_query_params(scope=normalize_subscription_scope(scope)))
+
+
+def build_clash_subscription_url(request: Request, scope: str = "all") -> str:
+    token = get_or_create_subscription_token()
+    return str(request.url_for("clash_subscription_feed", token=token).include_query_params(scope=normalize_subscription_scope(scope)))
 
 
 
@@ -460,9 +478,10 @@ def vless_link_with_name(link: str, name: str) -> str:
 def display_vless_link_for_node(node: sqlite3.Row | dict[str, object]) -> str:
     return vless_link_with_name(str(node["last_vless_link"] or ""), str(node["name"] or ""))
 
-def build_subscription_payload() -> str:
+def build_subscription_payload(scope: str = "all") -> str:
+    protocol_type = SUBSCRIPTION_SCOPES[normalize_subscription_scope(scope)]
     links = []
-    for node in list_subscribable_nodes():
+    for node in list_subscribable_nodes(protocol_type):
         link = display_vless_link_for_node(node).strip()
         if link:
             links.append(link)
@@ -509,10 +528,11 @@ def _vless_link_to_clash_proxy(link: str) -> dict[str, object] | None:
     return proxy
 
 
-def build_clash_subscription_payload() -> str:
+def build_clash_subscription_payload(scope: str = "all") -> str:
+    protocol_type = SUBSCRIPTION_SCOPES[normalize_subscription_scope(scope)]
     proxies = []
     seen_names: set[str] = set()
-    for node in list_subscribable_nodes():
+    for node in list_subscribable_nodes(protocol_type):
         link = display_vless_link_for_node(node).strip()
         if not link:
             continue
@@ -587,8 +607,13 @@ async def nodes_page(request: Request):
             "can_reinstall": True,
             "is_chain": bool(node["protocol_type"] == PROTOCOL_CHAIN),
         })
-    subscription_url = build_subscription_url(request)
-    clash_subscription_url = build_clash_subscription_url(request)
+    direct_nodes = [node for node in nodes if not node["is_chain"]]
+    chain_nodes = [node for node in nodes if node["is_chain"]]
+    subscription_urls = {
+        "all": {"v2rayn": build_subscription_url(request), "clash": build_clash_subscription_url(request)},
+        "direct": {"v2rayn": build_subscription_url(request, "direct"), "clash": build_clash_subscription_url(request, "direct")},
+        "chain": {"v2rayn": build_subscription_url(request, "chain"), "clash": build_clash_subscription_url(request, "chain")},
+    }
     return templates.TemplateResponse(
         request,
         "nodes.html",
@@ -596,8 +621,11 @@ async def nodes_page(request: Request):
             "request": request,
             "title": "节点列表",
             "nodes": nodes,
-            "subscription_url": subscription_url,
-            "clash_subscription_url": clash_subscription_url,
+            "direct_nodes": direct_nodes,
+            "chain_nodes": chain_nodes,
+            "subscription_url": subscription_urls["all"]["v2rayn"],
+            "clash_subscription_url": subscription_urls["all"]["clash"],
+            "subscription_urls": subscription_urls,
             "tags": list_tags(),
             "tag_colors": TAG_COLORS,
         },
@@ -605,31 +633,33 @@ async def nodes_page(request: Request):
 
 
 @app.get("/sub/{token}", response_class=PlainTextResponse, name="subscription_feed")
-async def subscription_feed(token: str):
+async def subscription_feed(token: str, scope: str = "all"):
     if not validate_subscription_token(token):
         return PlainTextResponse("forbidden", status_code=403)
-    payload = build_subscription_payload()
+    scope = normalize_subscription_scope(scope)
+    payload = build_subscription_payload(scope)
     return PlainTextResponse(
         payload,
         media_type="text/plain; charset=utf-8",
         headers={
             "Cache-Control": "no-store",
-            "Content-Disposition": 'inline; filename="nat-subscription.txt"',
+            "Content-Disposition": f'inline; filename="{subscription_filename(scope, "v2rayn")}"',
         },
     )
 
 
 @app.get("/sub/{token}/clash", response_class=PlainTextResponse, name="clash_subscription_feed")
-async def clash_subscription_feed(token: str):
+async def clash_subscription_feed(token: str, scope: str = "all"):
     if not validate_subscription_token(token):
         return PlainTextResponse("forbidden", status_code=403)
-    payload = build_clash_subscription_payload()
+    scope = normalize_subscription_scope(scope)
+    payload = build_clash_subscription_payload(scope)
     return PlainTextResponse(
         payload,
         media_type="text/yaml; charset=utf-8",
         headers={
             "Cache-Control": "no-store",
-            "Content-Disposition": 'inline; filename="nat-clash.yaml"',
+            "Content-Disposition": f'inline; filename="{subscription_filename(scope, "clash")}"',
         },
     )
 

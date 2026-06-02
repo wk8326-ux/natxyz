@@ -57,8 +57,10 @@ def test_nodes_page_after_login() -> None:
     assert response.status_code == 200
     assert "节点列表" in response.text
     assert "新建节点" in response.text
-    assert "复制 v2rayN 订阅 URL" in response.text
-    assert "复制 Clash 订阅 URL" in response.text
+    assert "直连节点" in response.text
+    assert "链式节点" in response.text
+    assert "复制直连 v2rayN 订阅 URL" in response.text
+    assert "复制链式 Clash 订阅 URL" in response.text
 
 
 def test_create_reinstall_and_delete_node_flow(monkeypatch) -> None:
@@ -319,6 +321,91 @@ def test_renamed_node_updates_export_and_subscription_link_name() -> None:
     assert "#NEW_LINK_NAME" in decoded
     assert "#OLD_LINK_NAME" not in decoded
 
+
+
+def test_scoped_subscription_feeds_split_direct_and_chain_nodes() -> None:
+    import base64
+
+    direct_id = create_node_record(
+        {
+            "name": "DIRECT_SUB_NODE",
+            "ip": "198.51.100.71",
+            "ssh_port": 2271,
+            "ssh_user": "root",
+            "ssh_password": "pass",
+            "public_port": 443,
+            "listen_port": 443,
+        }
+    )
+    chain_id = create_node_record(
+        {
+            "name": "CHAIN_SUB_NODE",
+            "ip": "198.51.100.72",
+            "ssh_port": 2272,
+            "ssh_user": "root",
+            "ssh_password": "pass",
+            "protocol_type": "vless_chain",
+            "public_port": 443,
+            "listen_port": 443,
+        }
+    )
+    from app.db import get_conn
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE nodes SET last_vless_link = ?, generated_uuid = ?, generated_public_key = ?, generated_short_id = ? WHERE node_id = ?",
+            (
+                "vless://22222222-2222-2222-2222-222222222222@198.51.100.71:443?security=reality&sni=www.microsoft.com&pbk=directpub&sid=abcd&type=tcp&flow=xtls-rprx-vision#DIRECT_SUB_NODE",
+                "22222222-2222-2222-2222-222222222222",
+                "directpub",
+                "abcd",
+                direct_id,
+            ),
+        )
+        conn.execute(
+            "UPDATE nodes SET last_vless_link = ?, generated_uuid = ?, generated_public_key = ?, generated_short_id = ? WHERE node_id = ?",
+            (
+                "vless://33333333-3333-3333-3333-333333333333@198.51.100.72:443?security=reality&sni=www.microsoft.com&pbk=chainpub&sid=efgh&type=tcp&flow=xtls-rprx-vision#CHAIN_SUB_NODE",
+                "33333333-3333-3333-3333-333333333333",
+                "chainpub",
+                "efgh",
+                chain_id,
+            ),
+        )
+
+    login()
+    page = client.get("/nodes")
+    assert page.status_code == 200
+    assert "scope=direct" in page.text
+    assert "scope=chain" in page.text
+    token = page.text.split("/sub/")[1].split('?')[0]
+
+    direct_feed = client.get(f"/sub/{token}?scope=direct")
+    assert direct_feed.status_code == 200
+    direct_decoded = base64.b64decode(direct_feed.text).decode("utf-8")
+    assert "#DIRECT_SUB_NODE" in direct_decoded
+    assert "#CHAIN_SUB_NODE" not in direct_decoded
+
+    chain_feed = client.get(f"/sub/{token}?scope=chain")
+    assert chain_feed.status_code == 200
+    chain_decoded = base64.b64decode(chain_feed.text).decode("utf-8")
+    assert "#CHAIN_SUB_NODE" in chain_decoded
+    assert "#DIRECT_SUB_NODE" not in chain_decoded
+
+    all_feed = client.get(f"/sub/{token}")
+    assert all_feed.status_code == 200
+    all_decoded = base64.b64decode(all_feed.text).decode("utf-8")
+    assert "#DIRECT_SUB_NODE" in all_decoded
+    assert "#CHAIN_SUB_NODE" in all_decoded
+
+    direct_clash = client.get(f"/sub/{token}/clash?scope=direct")
+    assert direct_clash.status_code == 200
+    assert "DIRECT_SUB_NODE" in direct_clash.text
+    assert "CHAIN_SUB_NODE" not in direct_clash.text
+
+    chain_clash = client.get(f"/sub/{token}/clash?scope=chain")
+    assert chain_clash.status_code == 200
+    assert "CHAIN_SUB_NODE" in chain_clash.text
+    assert "DIRECT_SUB_NODE" not in chain_clash.text
 
 def test_edit_chain_node_name_redirects_to_detail_and_updates() -> None:
     login()

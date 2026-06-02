@@ -238,6 +238,62 @@ button[disabled], .ghost-btn[disabled], .icon-btn[disabled] {
 }
 
 .node-table-wrap { overflow-x: auto; }
+
+.node-tabs {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  margin: 4px 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(26, 35, 56, 0.62);
+}
+
+.node-tab {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 9px 13px;
+  border-radius: 9px;
+}
+
+.node-tab.is-active {
+  background: rgba(76, 141, 255, 0.16);
+  color: var(--text);
+}
+
+.node-tab span {
+  color: var(--muted);
+  font-weight: 600;
+  margin-left: 4px;
+}
+
+.node-tab-panel[hidden] { display: none; }
+
+.tab-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 6px 0 12px;
+}
+
+.tab-title {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.compact-sub-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.compact-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .node-table {
   width: 100%;
   border-collapse: collapse;

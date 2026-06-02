@@ -1,53 +1,12 @@
 {% extends 'base.html' %}
 
-{% block content %}
-<section class="panel">
-  <div class="panel-head">
-      <div>
-        <div class="panel-title">节点列表</div>
-        <div class="panel-subtitle">支持直连节点和链式节点；链式节点以“前置入口 → 后端落地”作为独立记录管理。</div>
-      </div>
+{% macro subscription_buttons(urls, label='') -%}
+  <button class="icon-btn sub-brand-icon" type="button" title="复制{{ label }} v2rayN 订阅 URL" aria-label="复制{{ label }} v2rayN 订阅 URL" onclick='copyText({{ urls.v2rayn | tojson }}, this)'><img src="/static/icons/v2rayn.png" alt="" aria-hidden="true"></button>
+  <button class="icon-btn sub-brand-icon" type="button" title="复制{{ label }} Clash 订阅 URL" aria-label="复制{{ label }} Clash 订阅 URL" onclick='copyText({{ urls.clash | tojson }}, this)'><img src="/static/icons/clash.png" alt="" aria-hidden="true"></button>
+{%- endmacro %}
 
-    <div class="panel-actions">
-      <button class="icon-btn sub-brand-icon" type="button" title="复制 v2rayN 订阅 URL" aria-label="复制 v2rayN 订阅 URL" onclick='copyText({{ subscription_url | tojson }}, this)'><img src="/static/icons/v2rayn.png" alt="" aria-hidden="true"></button>
-      <button class="icon-btn sub-brand-icon" type="button" title="复制 Clash 订阅 URL" aria-label="复制 Clash 订阅 URL" onclick='copyText({{ clash_subscription_url | tojson }}, this)'><img src="/static/icons/clash.png" alt="" aria-hidden="true"></button>
-      <a class="ghost-btn link-plain" href="/nodes/new-chain">新建链式节点</a>
-      <a class="link-btn" href="/nodes/new">新建节点</a>
-    </div>
-  </div>
-
-  <div class="tag-toolbar">
-    <details class="tag-add-popover">
-      <summary class="small-btn">+ 标签</summary>
-      <form class="tag-create-form" method="post" action="/tags">
-        <input type="text" name="name" placeholder="落地 / 线路 / CN2" maxlength="20">
-        <div class="color-dots">
-          {% for color in tag_colors %}
-            <label class="color-dot" style="--tag-color: {{ color }}" title="{{ color }}">
-              <input type="radio" name="color" value="{{ color }}" {% if loop.first %}checked{% endif %}>
-              <span></span>
-            </label>
-          {% endfor %}
-        </div>
-        <button class="small-btn primary-small" type="submit">添加</button>
-      </form>
-    </details>
-
-    {% if tags %}
-    <div class="tag-manager">
-      {% for tag in tags %}
-        <form method="post" action="/tags/{{ tag.tag_id }}/delete" onsubmit="return confirm('删除标签 {{ tag.name }}？');">
-          <span class="tag-chip" style="--tag-color: {{ tag.color }}">{{ tag.name }}</span>
-          <button class="tag-delete" type="submit" title="删除标签">×</button>
-        </form>
-      {% endfor %}
-    </div>
-    {% else %}
-    <span class="muted-small">暂无标签</span>
-    {% endif %}
-  </div>
-
-  {% if nodes %}
+{% macro node_table(section_nodes, empty_text) -%}
+  {% if section_nodes %}
   <div class="node-table-wrap">
     <table class="node-table">
       <thead>
@@ -62,7 +21,7 @@
         </tr>
       </thead>
       <tbody>
-        {% for node in nodes %}
+        {% for node in section_nodes %}
         <tr>
           <td>
             <div class="node-name-cell">
@@ -128,7 +87,112 @@
     </table>
   </div>
   {% else %}
-  <div class="empty-box">暂无节点，先新建一个。</div>
+  <div class="empty-box">{{ empty_text }}</div>
   {% endif %}
+{%- endmacro %}
+
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+      <div>
+        <div class="panel-title">节点列表</div>
+        <div class="panel-subtitle">直连和链式分开管理；订阅按钮随当前分类独立复制。</div>
+      </div>
+
+    <div class="panel-actions">
+      <div class="compact-sub-actions" aria-label="全部订阅">
+        <span class="compact-label">全部</span>
+        {{ subscription_buttons(subscription_urls.all, '全部') }}
+      </div>
+      <a class="ghost-btn link-plain" href="/nodes/new-chain">新建链式节点</a>
+      <a class="link-btn" href="/nodes/new">新建节点</a>
+    </div>
+  </div>
+
+  <div class="node-tabs" role="tablist" aria-label="节点分类">
+    <button class="node-tab is-active" type="button" data-tab-target="direct" role="tab" aria-selected="true">直连 <span>{{ direct_nodes|length }}</span></button>
+    <button class="node-tab" type="button" data-tab-target="chain" role="tab" aria-selected="false">链式 <span>{{ chain_nodes|length }}</span></button>
+  </div>
+
+  <div class="tag-toolbar">
+    <details class="tag-add-popover">
+      <summary class="small-btn">+ 标签</summary>
+      <form class="tag-create-form" method="post" action="/tags">
+        <input type="text" name="name" placeholder="落地 / 线路 / CN2" maxlength="20">
+        <div class="color-dots">
+          {% for color in tag_colors %}
+            <label class="color-dot" style="--tag-color: {{ color }}" title="{{ color }}">
+              <input type="radio" name="color" value="{{ color }}" {% if loop.first %}checked{% endif %}>
+              <span></span>
+            </label>
+          {% endfor %}
+        </div>
+        <button class="small-btn primary-small" type="submit">添加</button>
+      </form>
+    </details>
+
+    {% if tags %}
+    <div class="tag-manager">
+      {% for tag in tags %}
+        <form method="post" action="/tags/{{ tag.tag_id }}/delete" onsubmit="return confirm('删除标签 {{ tag.name }}？');">
+          <span class="tag-chip" style="--tag-color: {{ tag.color }}">{{ tag.name }}</span>
+          <button class="tag-delete" type="submit" title="删除标签">×</button>
+        </form>
+      {% endfor %}
+    </div>
+    {% else %}
+    <span class="muted-small">暂无标签</span>
+    {% endif %}
+  </div>
+
+  <div class="node-tab-panel is-active" data-tab-panel="direct" role="tabpanel">
+    <div class="tab-panel-head">
+      <div>
+        <div class="tab-title">直连节点</div>
+        <div class="panel-subtitle">普通 VLESS + Reality 入口。</div>
+      </div>
+      <div class="compact-sub-actions">
+        <span class="compact-label">订阅</span>
+        {{ subscription_buttons(subscription_urls.direct, '直连') }}
+      </div>
+    </div>
+    {{ node_table(direct_nodes, '暂无直连节点。') }}
+  </div>
+
+  <div class="node-tab-panel" data-tab-panel="chain" role="tabpanel" hidden>
+    <div class="tab-panel-head">
+      <div>
+        <div class="tab-title">链式节点</div>
+        <div class="panel-subtitle">前置入口 → 后端落地。</div>
+      </div>
+      <div class="compact-sub-actions">
+        <span class="compact-label">订阅</span>
+        {{ subscription_buttons(subscription_urls.chain, '链式') }}
+      </div>
+    </div>
+    {{ node_table(chain_nodes, '暂无链式节点。') }}
+  </div>
 </section>
+
+<script>
+(function () {
+  const tabs = Array.from(document.querySelectorAll('.node-tab'));
+  const panels = Array.from(document.querySelectorAll('.node-tab-panel'));
+  tabs.forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const target = tab.dataset.tabTarget;
+      tabs.forEach((item) => {
+        const active = item === tab;
+        item.classList.toggle('is-active', active);
+        item.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      panels.forEach((panel) => {
+        const active = panel.dataset.tabPanel === target;
+        panel.classList.toggle('is-active', active);
+        panel.hidden = !active;
+      });
+    });
+  });
+})();
+</script>
 {% endblock %}
