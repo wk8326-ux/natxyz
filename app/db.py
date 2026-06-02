@@ -4,10 +4,12 @@ import secrets
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 from .config import DATA_DIR, DB_PATH
+from .regions import replace_vless_fragment
 
 
 NODE_SCHEMA = """
@@ -30,6 +32,10 @@ CREATE TABLE IF NOT EXISTS nodes (
     generated_public_key TEXT,
     generated_short_id TEXT,
     last_vless_link TEXT,
+    cf_host TEXT,
+    cf_tunnel_token TEXT,
+    ws_port INTEGER NOT NULL DEFAULT 8080,
+    ws_path TEXT NOT NULL DEFAULT '/',
     agent_token TEXT,
     status TEXT NOT NULL DEFAULT 'never_deployed',
     last_seen_at TEXT,
@@ -137,6 +143,10 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "nodes", "chain_mode", "TEXT")
     _ensure_column(conn, "nodes", "manual_country_code", "TEXT")
     _ensure_column(conn, "nodes", "manual_region_label", "TEXT")
+    _ensure_column(conn, "nodes", "cf_host", "TEXT")
+    _ensure_column(conn, "nodes", "cf_tunnel_token", "TEXT")
+    _ensure_column(conn, "nodes", "ws_port", "INTEGER NOT NULL DEFAULT 8080")
+    _ensure_column(conn, "nodes", "ws_path", "TEXT NOT NULL DEFAULT '/'")
 
 
 
@@ -175,10 +185,26 @@ def list_direct_vless_nodes() -> list[sqlite3.Row]:
             """
             SELECT * FROM nodes
             WHERE protocol_type = 'vless_reality_singbox'
+              AND TRIM(COALESCE(ip, '')) != ''
+              AND COALESCE(public_port, 0) > 0
+              AND TRIM(COALESCE(last_vless_link, '')) != ''
             ORDER BY updated_at DESC, created_at DESC
             """
         ).fetchall()
 
+
+def list_chain_backend_nodes() -> list[sqlite3.Row]:
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            SELECT * FROM nodes
+            WHERE protocol_type = 'vless_reality_singbox'
+              AND TRIM(COALESCE(ip, '')) != ''
+              AND COALESCE(public_port, 0) > 0
+              AND TRIM(COALESCE(last_vless_link, '')) != ''
+            ORDER BY updated_at DESC, created_at DESC
+            """
+        ).fetchall()
 
 
 def list_subscribable_nodes(protocol_type: str | None = None) -> list[sqlite3.Row]:
@@ -257,15 +283,117 @@ def get_or_create_subscription_token() -> str:
 
 
 
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _get_setting(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute(
+        "SELECT setting_value FROM app_settings WHERE setting_key = ?",
+        (key,),
+    ).fetchone()
+    if not row:
+        return None
+    return str(row["setting_value"] or "") or None
+
+
+def _set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings (setting_key, setting_value, updated_at) VALUES (?, ?, ?)",
+        (key, value, now_iso()),
+    )
+
+
 def validate_subscription_token(token: str) -> bool:
+    token = str(token or "")
+    if not token:
+        return False
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT setting_value FROM app_settings WHERE setting_key = ?",
-            ("subscription_token",),
-        ).fetchone()
-        if not row:
+        current_token = _get_setting(conn, "subscription_token")
+        if current_token and secrets.compare_digest(token, current_token):
+            return True
+        previous_token = _get_setting(conn, "subscription_previous_token")
+        previous_expires_at = _parse_iso_datetime(_get_setting(conn, "subscription_previous_expires_at"))
+        if not previous_token or not previous_expires_at:
             return False
-        return secrets.compare_digest(token, row["setting_value"])
+        if previous_expires_at <= datetime.now(timezone.utc):
+            return False
+        return secrets.compare_digest(token, previous_token)
+
+
+def rotate_subscription_token() -> dict[str, str]:
+    with get_conn() as conn:
+        current_token = _get_setting(conn, "subscription_token")
+        if not current_token:
+            current_token = build_subscription_token()
+            _set_setting(conn, "subscription_token", current_token)
+        new_token = build_subscription_token()
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+        _set_setting(conn, "subscription_previous_token", current_token)
+        _set_setting(conn, "subscription_previous_expires_at", expires_at)
+        _set_setting(conn, "subscription_token", new_token)
+        return {
+            "subscription_token": new_token,
+            "previous_token": current_token,
+            "previous_expires_at": expires_at,
+        }
+
+
+def get_subscription_token_state() -> dict[str, str | None]:
+    with get_conn() as conn:
+        current_token = _get_setting(conn, "subscription_token")
+        if not current_token:
+            current_token = build_subscription_token()
+            _set_setting(conn, "subscription_token", current_token)
+        previous_token = _get_setting(conn, "subscription_previous_token")
+        previous_expires_at = _get_setting(conn, "subscription_previous_expires_at")
+        expires_dt = _parse_iso_datetime(previous_expires_at)
+        if expires_dt and expires_dt <= datetime.now(timezone.utc):
+            previous_token = None
+            previous_expires_at = None
+        return {
+            "subscription_token": current_token,
+            "previous_token": previous_token,
+            "previous_expires_at": previous_expires_at,
+        }
+
+
+def redact_sensitive_text(text: str | None) -> str:
+    value = str(text or "")
+    if not value:
+        return ""
+    replacements: set[str] = set()
+    with get_conn() as conn:
+        for row in conn.execute(
+            """
+            SELECT ssh_password, cf_tunnel_token, generated_private_key,
+                   generated_uuid, last_vless_link
+            FROM nodes
+            """
+        ).fetchall():
+            for key in ["ssh_password", "cf_tunnel_token", "generated_private_key", "generated_uuid", "last_vless_link"]:
+                item = str(row[key] or "").strip()
+                if len(item) >= 6:
+                    replacements.add(item)
+        for key in ["subscription_token", "subscription_previous_token"]:
+            item = _get_setting(conn, key)
+            if item and len(item) >= 6:
+                replacements.add(item)
+    for item in sorted(replacements, key=len, reverse=True):
+        value = value.replace(item, "[REDACTED]")
+    import re
+    value = re.sub(r"vless://[^\s'\"<>]+", "vless://[REDACTED]", value)
+    value = re.sub(r"(eyJ[A-Za-z0-9_\-.]{20,})", "[REDACTED_TOKEN]", value)
+    value = re.sub(r"-----BEGIN [^-]+ PRIVATE KEY-----.*?-----END [^-]+ PRIVATE KEY-----", "[REDACTED_PRIVATE_KEY]", value, flags=re.S)
+    value = re.sub(r"((?:password|passwd|pwd|token|private[_-]?key|uuid)\s*[=:]\s*)\S+", r"\1[REDACTED]", value, flags=re.I)
+    value = re.sub(r"(sshpass\s+-p\s+)(?:'[^']*'|\"[^\"]*\"|\S+)", r"\1[REDACTED]", value, flags=re.I)
+    value = re.sub(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b", "[REDACTED_UUID]", value)
+    return value
 
 
 
@@ -282,9 +410,10 @@ def create_node_record(payload: dict[str, Any]) -> str:
                 public_port, listen_port,
                 selected_reality_target, generated_uuid, generated_private_key,
                 generated_public_key, generated_short_id, last_vless_link,
+                cf_host, cf_tunnel_token, ws_port, ws_path,
                 agent_token, status, last_seen_at, last_report_json,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 node_id,
@@ -299,12 +428,16 @@ def create_node_record(payload: dict[str, Any]) -> str:
                 payload.get("chain_mode"),
                 payload["public_port"],
                 payload["listen_port"],
-                None,
-                None,
-                None,
-                None,
-                None,
-                "",
+                payload.get("selected_reality_target"),
+                payload.get("generated_uuid"),
+                payload.get("generated_private_key"),
+                payload.get("generated_public_key"),
+                payload.get("generated_short_id"),
+                payload.get("last_vless_link", ""),
+                payload.get("cf_host"),
+                payload.get("cf_tunnel_token"),
+                payload.get("ws_port") or 8080,
+                payload.get("ws_path") or "/",
                 build_agent_token(),
                 "never_deployed",
                 None,
@@ -314,6 +447,16 @@ def create_node_record(payload: dict[str, Any]) -> str:
             ),
         )
     return node_id
+
+
+
+def rename_node_record(node_id: str, name: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE nodes SET name = ?, updated_at = ? WHERE node_id = ?",
+            (name, now_iso(), node_id),
+        )
+        return cur.rowcount > 0
 
 
 
@@ -336,6 +479,10 @@ def update_node_record(node_id: str, payload: dict[str, Any]) -> None:
                 manual_country_code = ?,
                 manual_region_label = ?,
                 last_vless_link = ?,
+                cf_host = ?,
+                cf_tunnel_token = ?,
+                ws_port = ?,
+                ws_path = ?,
                 updated_at = ?
             WHERE node_id = ?
             """,
@@ -354,12 +501,80 @@ def update_node_record(node_id: str, payload: dict[str, Any]) -> None:
                 payload.get("manual_country_code"),
                 payload.get("manual_region_label"),
                 payload.get("last_vless_link"),
+                payload.get("cf_host"),
+                payload.get("cf_tunnel_token"),
+                payload.get("ws_port") or 8080,
+                payload.get("ws_path") or "/",
                 now_iso(),
                 node_id,
             ),
         )
 
 
+
+def extract_vless_uuid(vless_link: str | None) -> str:
+    link = str(vless_link or "").strip()
+    if not link.startswith("vless://"):
+        return ""
+    try:
+        parsed = urlparse(link)
+    except ValueError:
+        return ""
+    return parsed.username or ""
+
+
+def rebuild_tunnel_vless_link(*, uuid_value: str, cf_host: str, ws_path: str, name: str) -> str:
+    safe_path = ws_path or "/"
+    return replace_vless_fragment(
+        f"vless://{uuid_value}@{cf_host}:443"
+        f"?encryption=none&security=tls&type=ws&host={cf_host}&path={safe_path}&sni={cf_host}",
+        name,
+    )
+
+
+def backfill_tunnel_generated_fields() -> list[dict[str, str]]:
+    updated: list[dict[str, str]] = []
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT node_id, name, cf_host, ws_path, generated_uuid, last_vless_link
+            FROM nodes
+            WHERE protocol_type = 'cf_vless_ws'
+            """
+        ).fetchall()
+        for row in rows:
+            cf_host = str(row["cf_host"] or "").strip()
+            current_uuid = str(row["generated_uuid"] or "").strip()
+            link_uuid = extract_vless_uuid(row["last_vless_link"])
+            uuid_value = current_uuid or link_uuid
+            if not (cf_host and uuid_value):
+                continue
+            last_vless_link = str(row["last_vless_link"] or "").strip()
+            if not last_vless_link:
+                last_vless_link = rebuild_tunnel_vless_link(
+                    uuid_value=uuid_value,
+                    cf_host=cf_host,
+                    ws_path=str(row["ws_path"] or "/").strip() or "/",
+                    name=str(row["name"] or row["node_id"]),
+                )
+            if current_uuid == uuid_value and str(row["last_vless_link"] or "").strip() == last_vless_link:
+                continue
+            conn.execute(
+                """
+                UPDATE nodes
+                SET generated_uuid = ?,
+                    last_vless_link = ?,
+                    updated_at = ?
+                WHERE node_id = ?
+                """,
+                (uuid_value, last_vless_link, now_iso(), row["node_id"]),
+            )
+            updated.append({
+                "node_id": row["node_id"],
+                "name": row["name"] or row["node_id"],
+                "generated_uuid": uuid_value,
+            })
+    return updated
 
 def list_tags() -> list[sqlite3.Row]:
     with get_conn() as conn:
@@ -463,9 +678,10 @@ def create_demo_node() -> None:
                 public_port, listen_port,
                 selected_reality_target, generated_uuid, generated_private_key,
                 generated_public_key, generated_short_id, last_vless_link,
+                cf_host, cf_tunnel_token, ws_port, ws_path,
                 agent_token, status, last_seen_at, last_report_json,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "node_demo_001",
@@ -585,7 +801,7 @@ def mark_deployment_success(
                 summary_log = ?, raw_log = ?, generated_vless_link = ?
             WHERE deploy_id = ?
             """,
-            (ts, "success", None, summary_log, raw_log, generated_vless_link, deploy_id),
+            (ts, "success", None, redact_sensitive_text(summary_log), redact_sensitive_text(raw_log), redact_sensitive_text(generated_vless_link), deploy_id),
         )
         conn.execute(
             """
@@ -612,6 +828,10 @@ def mark_deployment_failed(
         ).fetchone()
         if not deployment:
             return
+        node = conn.execute(
+            "SELECT status, last_vless_link, last_seen_at FROM nodes WHERE node_id = ?",
+            (deployment["node_id"],),
+        ).fetchone()
         ts = now_iso()
         conn.execute(
             """
@@ -619,11 +839,20 @@ def mark_deployment_failed(
             SET ended_at = ?, result = ?, failure_stage = ?, summary_log = ?, raw_log = ?
             WHERE deploy_id = ?
             """,
-            (ts, "failed", failure_stage, summary_log, raw_log, deploy_id),
+            (ts, "failed", failure_stage, redact_sensitive_text(summary_log), redact_sensitive_text(raw_log), deploy_id),
         )
+        current_status = node["status"] if node else ""
+        has_existing_link = bool(node and str(node["last_vless_link"] or "").strip())
+        has_recent_report = bool(node and str(node["last_seen_at"] or "").strip())
+        if current_status in {"online", "offline"}:
+            next_status = current_status or "offline"
+        elif has_existing_link or has_recent_report:
+            next_status = "offline"
+        else:
+            next_status = "deploy_failed"
         conn.execute(
             "UPDATE nodes SET status = ?, updated_at = ? WHERE node_id = ?",
-            ("deploy_failed", ts, deployment["node_id"]),
+            (next_status, ts, deployment["node_id"]),
         )
 
 

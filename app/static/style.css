@@ -131,6 +131,27 @@ input {
   font: inherit;
 }
 
+.secret-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.secret-input-row input {
+  min-width: 0;
+}
+
+.secret-input-row .ghost-btn {
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .secret-input-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 button, .link-btn, .ghost-btn, .danger-btn, .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -294,6 +315,24 @@ button[disabled], .ghost-btn[disabled], .icon-btn[disabled] {
   font-size: 12px;
 }
 
+.subscription-token-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(26, 35, 56, 0.44);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.subscription-token-note code {
+  color: var(--text);
+  font-family: var(--mono);
+}
+
 .node-table {
   width: 100%;
   border-collapse: collapse;
@@ -315,11 +354,102 @@ button[disabled], .ghost-btn[disabled], .icon-btn[disabled] {
   letter-spacing: .02em;
 }
 
+.sort-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  letter-spacing: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+.sort-header:hover,
+.sort-header.is-active {
+  color: var(--text);
+}
+
+.sort-arrow {
+  display: inline-block;
+  width: 10px;
+  color: #8bf0c2;
+  font-size: 11px;
+}
+
 .node-name-cell,
 .detail-title-row {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  position: relative;
+}
+
+.name-inline-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.node-name-text {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-name-input {
+  display: none;
+  width: min(220px, 28vw);
+  height: 28px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(76, 141, 255, 0.45);
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.name-edit-trigger,
+.name-save-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
+
+.name-edit-trigger:hover,
+.name-save-trigger:hover {
+  color: var(--text);
+  background: rgba(255,255,255,0.06);
+  border-color: var(--line);
+}
+
+.name-save-trigger {
+  display: none;
+  color: #8bf0c2;
+}
+
+.name-inline-form.is-editing .node-name-text,
+.name-inline-form.is-editing .name-edit-trigger {
+  display: none;
+}
+
+.name-inline-form.is-editing .node-name-input,
+.name-inline-form.is-editing .name-save-trigger {
+  display: inline-flex;
 }
 
 .node-kind-icon {
@@ -428,11 +558,48 @@ button[disabled], .ghost-btn[disabled], .icon-btn[disabled] {
 
 .flag-cell {
   display: inline-flex;
-  min-width: 30px;
-  font-size: 18px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 38px;
   line-height: 1;
-  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", emoji, sans-serif;
-  font-variant-emoji: emoji;
+}
+.flag-icon {
+  display: inline-block;
+  width: 24px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.16), 0 4px 12px rgba(0,0,0,.18);
+  vertical-align: middle;
+}
+.flag-arrow {
+  color: #7f8ca8;
+  font-size: 11px;
+  line-height: 1;
+}
+.flag-badge {
+  display: none;
+  min-width: 28px;
+  padding: 3px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(147, 160, 191, 0.28);
+  background: rgba(147, 160, 191, 0.10);
+  color: #d9e4ff;
+  font-family: "JetBrains Mono", "Cascadia Code", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-align: center;
+}
+.flag-cell:not(:has(.flag-icon)) .flag-badge,
+.flag-cell.flag-missing .flag-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.flag-cell.flag-missing .flag-arrow {
+  display: none;
 }
 
 .tag-toolbar {

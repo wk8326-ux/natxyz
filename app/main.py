@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
+import re
 import sqlite3
 import urllib.parse
 import uuid
@@ -28,8 +30,12 @@ from .db import (
     get_deployment,
     get_node,
     get_or_create_subscription_token,
+    get_subscription_token_state,
+    redact_sensitive_text,
+    rotate_subscription_token,
     ingest_agent_report,
     init_db,
+    list_chain_backend_nodes,
     list_deployments_for_node,
     list_direct_vless_nodes,
     list_node_tag_ids,
@@ -38,12 +44,14 @@ from .db import (
     list_subscribable_nodes,
     list_tags,
     mark_node_deployed_from_report,
+    rename_node_record,
     set_node_tags,
     create_tag,
     update_node_record,
     validate_subscription_token,
 )
 from .jobs import is_deploy_running, submit_reinstall_job
+from .regions import country_code_to_badge, country_code_to_flag, lookup_region_by_host, region_from_node, replace_vless_fragment, vless_remark_for_node
 
 app = FastAPI(title=APP_NAME)
 app.add_middleware(
@@ -134,11 +142,19 @@ TAG_COLORS = ["#4c8dff", "#2ccf8f", "#f0b84b", "#ff6b7a", "#a78bfa", "#22d3ee", 
 CHAIN_MODE = "vless_reality_to_vless_reality"
 PROTOCOL_DIRECT = "vless_reality_singbox"
 PROTOCOL_CHAIN = "vless_chain"
-
+PROTOCOL_TUNNEL = "cf_vless_ws"
 
 
 def is_chain_protocol(protocol_type: object) -> bool:
     return str(protocol_type or "") == PROTOCOL_CHAIN
+
+
+def is_tunnel_protocol(protocol_type: object) -> bool:
+    return str(protocol_type or "") == PROTOCOL_TUNNEL
+
+
+def is_direct_vless_protocol(protocol_type: object) -> bool:
+    return str(protocol_type or "") in {"", PROTOCOL_DIRECT}
 
 
 
@@ -157,6 +173,10 @@ def node_to_form_values(node) -> dict[str, object]:
         "chain_mode": node["chain_mode"],
         "manual_country_code": node["manual_country_code"] or "",
         "manual_region_label": node["manual_region_label"] or "",
+        "cf_host": node["cf_host"] or "",
+        "cf_tunnel_token": node["cf_tunnel_token"] or "",
+        "ws_port": node["ws_port"] or 8080,
+        "ws_path": node["ws_path"] or "/",
     }
 
 
@@ -176,7 +196,41 @@ def default_form_values() -> dict[str, object]:
         "chain_mode": CHAIN_MODE,
         "manual_country_code": "",
         "manual_region_label": "",
+        "cf_host": "",
+        "cf_tunnel_token": "",
+        "ws_port": 8080,
+        "ws_path": "/",
     }
+
+
+
+def normalize_host_value(value: str) -> str:
+    value = str(value or "").strip()
+    value = value.replace("https://", "").replace("http://", "").strip().strip("/")
+    if "/" in value:
+        value = value.split("/", 1)[0]
+    if value.startswith("[") and "]" in value:
+        return value[1:value.index("]")].strip()
+    if value.count(":") == 1:
+        host_part, maybe_port = value.rsplit(":", 1)
+        if maybe_port.isdigit():
+            value = host_part
+    return value.strip().lower()
+
+
+_HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$")
+
+
+def is_valid_ip_or_hostname(value: str) -> bool:
+    value = normalize_host_value(value)
+    if not value:
+        return False
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        pass
+    return bool(_HOSTNAME_RE.match(value)) and "." in value
 
 
 
@@ -196,7 +250,7 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
     errors: list[str] = []
     cleaned: dict[str, object] = {}
     protocol_type = str(form.get("protocol_type") or PROTOCOL_DIRECT).strip() or PROTOCOL_DIRECT
-    if protocol_type not in {PROTOCOL_DIRECT, PROTOCOL_CHAIN}:
+    if protocol_type not in {PROTOCOL_DIRECT, PROTOCOL_CHAIN, PROTOCOL_TUNNEL}:
         errors.append("protocol_type 不支持")
         protocol_type = PROTOCOL_DIRECT
     cleaned["protocol_type"] = protocol_type
@@ -206,15 +260,31 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
         for optional_key in ["ip", "ssh_port", "ssh_user", "ssh_password", "public_port", "listen_port"]:
             if optional_key in required_fields:
                 required_fields.remove(optional_key)
+    if is_tunnel_protocol(protocol_type):
+        for optional_key in ["public_port", "listen_port"]:
+            if optional_key in required_fields:
+                required_fields.remove(optional_key)
 
     for key in required_fields:
         value = str(form.get(key, "")).strip()
+        if key == "ip":
+            value = normalize_host_value(value)
         if not value:
             errors.append(f"{key} 不能为空")
         cleaned[key] = value
 
     for key in REQUIRED_FIELDS:
-        cleaned.setdefault(key, str(form.get(key, "")).strip())
+        default_value = str(form.get(key, "")).strip()
+        if key == "ip":
+            default_value = normalize_host_value(default_value)
+        cleaned.setdefault(key, default_value)
+
+    # Tunnel mode does not use NAT public/listen ports. Keep internal safe defaults
+    # so DB NOT NULL / integer conversion paths never reject an otherwise valid
+    # tunnel node when the hidden/unused inputs are blank.
+    if is_tunnel_protocol(protocol_type):
+        cleaned["public_port"] = 443
+        cleaned["listen_port"] = str(form.get("ws_port") or "8080").strip() or "8080"
 
     cleaned["front_node_id"] = str(form.get("front_node_id") or "").strip()
     cleaned["backend_node_id"] = str(form.get("backend_node_id") or "").strip()
@@ -225,6 +295,15 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
         errors.append("国家/地区代码请填写两位字母，例如 JP / HK / US")
     cleaned["manual_country_code"] = manual_country_code or None
     cleaned["manual_region_label"] = manual_region_label or None
+    cf_host = str(form.get("cf_host") or "").strip().lower().replace("https://", "").replace("http://", "").strip("/")
+    cf_tunnel_token = str(form.get("cf_tunnel_token") or "").strip()
+    ws_path = str(form.get("ws_path") or "/").strip() or "/"
+    if not ws_path.startswith("/"):
+        ws_path = f"/{ws_path}"
+    cleaned["cf_host"] = cf_host or None
+    cleaned["cf_tunnel_token"] = cf_tunnel_token or None
+    cleaned["ws_port"] = str(form.get("ws_port") or "8080").strip() or "8080"
+    cleaned["ws_path"] = ws_path
 
     if is_chain_protocol(protocol_type):
         front_node_id = str(cleaned["front_node_id"] or "")
@@ -245,19 +324,38 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
         if front_node and front_node["protocol_type"] != PROTOCOL_DIRECT:
             errors.append("前置节点必须是 VLESS + Reality 直连节点")
         if backend_node and backend_node["protocol_type"] != PROTOCOL_DIRECT:
-            errors.append("后端节点必须是 VLESS + Reality 直连节点")
+            errors.append("后端节点必须是 VLESS + Reality 直连节点；tunnel 仅作为单节点使用，不再作为链式落地端")
         if front_node and editing_node_id and front_node["node_id"] == editing_node_id:
             errors.append("链式节点不能选择自己作为前置节点")
         if backend_node and editing_node_id and backend_node["node_id"] == editing_node_id:
             errors.append("链式节点不能选择自己作为后端节点")
         if front_node:
             apply_chain_endpoint_defaults(cleaned, front_node)
+    elif is_tunnel_protocol(protocol_type):
+        if not cf_host:
+            errors.append("应用路由域名不能为空")
+        if not cf_tunnel_token:
+            errors.append("Tunnel token 不能为空")
+        cleaned["front_node_id"] = None
+        cleaned["backend_node_id"] = None
+        cleaned["chain_mode"] = None
+        cleaned["public_port"] = 443
+        cleaned["listen_port"] = cleaned["ws_port"]
     else:
         cleaned["front_node_id"] = None
         cleaned["backend_node_id"] = None
         cleaned["chain_mode"] = None
+        cleaned["cf_host"] = None
+        cleaned["cf_tunnel_token"] = None
+        cleaned["ws_port"] = 8080
+        cleaned["ws_path"] = "/"
 
-    for int_key in ["ssh_port", "public_port", "listen_port"]:
+    if not is_chain_protocol(protocol_type):
+        host_value = str(cleaned.get("ip") or "").strip()
+        if host_value and not is_valid_ip_or_hostname(host_value):
+            errors.append("NAT IP 可填写 IP 或 DDNS 域名，例如 1.2.3.4 / hinet.example.com")
+
+    for int_key in ["ssh_port", "public_port", "listen_port", "ws_port"]:
         value = str(cleaned.get(int_key, ""))
         if value:
             try:
@@ -277,17 +375,16 @@ def protocol_label(protocol_type: object) -> str:
     mapping = {
         PROTOCOL_DIRECT: "vless",
         PROTOCOL_CHAIN: "vless",
+        PROTOCOL_TUNNEL: "tunnel",
         "hy2": "hy2",
         "hysteria2": "hy2",
     }
     return mapping.get(str(protocol_type or ""), str(protocol_type or "-"))
 
 
-def country_code_to_flag(country_code: str) -> str:
-    code = country_code.strip().upper()
-    if len(code) != 2 or not code.isalpha():
-        return ""
-    return "".join(chr(127397 + ord(ch)) for ch in code)
+def country_code_to_badge(country_code: str) -> str:
+    from .regions import country_code_to_badge as _country_code_to_badge
+    return _country_code_to_badge(country_code)
 
 
 COUNTRY_NAME_MAP = {
@@ -300,33 +397,10 @@ COUNTRY_NAME_MAP = {
     "TR": "土耳其",
     "AU": "澳洲",
     "CN": "中国",
+    "MY": "马来西亚",
+    "DE": "德国",
+    "GB": "英国",
 }
-
-
-def manual_region_from_node(node) -> dict[str, str] | None:
-    code = str(node["manual_country_code"] or "").strip().upper() if "manual_country_code" in node.keys() else ""
-    label = str(node["manual_region_label"] or "").strip() if "manual_region_label" in node.keys() else ""
-    if not code and not label:
-        return None
-    return {"code": code, "flag": country_code_to_flag(code) if code else "📍", "label": label or COUNTRY_NAME_MAP.get(code, code)}
-
-
-def lookup_ip_region(ip: str) -> dict[str, str]:
-    ip = str(ip or "").strip()
-    if not ip:
-        return {"flag": "", "label": ""}
-    try:
-        import urllib.request
-        with urllib.request.urlopen(f"http://ip-api.com/json/{urllib.parse.quote(ip)}?fields=status,countryCode,country,regionName", timeout=1.6) as resp:
-            data = json.loads(resp.read().decode("utf-8", "ignore"))
-        if data.get("status") == "success" and data.get("countryCode"):
-            code = str(data.get("countryCode") or "").upper()
-            region = str(data.get("regionName") or "").strip()
-            country = COUNTRY_NAME_MAP.get(code, str(data.get("country") or code))
-            return {"code": code, "flag": country_code_to_flag(code), "label": f"{country} {region}".strip()}
-    except Exception:
-        pass
-    return {"code": "", "flag": "🌐", "label": ip}
 
 
 def render_node_form(
@@ -339,7 +413,8 @@ def render_node_form(
     node_id: str | None = None,
     form_kind: str = "direct",
 ):
-    direct_nodes = [node for node in list_direct_vless_nodes() if node["node_id"] != node_id]
+    front_nodes = [node for node in list_direct_vless_nodes() if node["node_id"] != node_id]
+    backend_nodes = [node for node in list_chain_backend_nodes() if node["node_id"] != node_id]
     return templates.TemplateResponse(
         request,
         "node-form.html",
@@ -350,12 +425,16 @@ def render_node_form(
             "form_values": form_values,
             "errors": errors or [],
             "node_id": node_id,
-            "direct_nodes": direct_nodes,
+            "direct_nodes": front_nodes,
+            "front_nodes": front_nodes,
+            "backend_nodes": backend_nodes,
             "protocol_direct": PROTOCOL_DIRECT,
             "protocol_chain": PROTOCOL_CHAIN,
+            "protocol_tunnel": PROTOCOL_TUNNEL,
             "chain_mode": CHAIN_MODE,
             "form_kind": form_kind,
             "is_chain_form": form_kind == "chain" or form_values.get("protocol_type") == PROTOCOL_CHAIN,
+            "is_tunnel_form": form_values.get("protocol_type") == PROTOCOL_TUNNEL,
         },
     )
 
@@ -430,6 +509,23 @@ SUBSCRIPTION_SCOPES = {
 }
 
 
+def mask_ip_for_list(ip_value: str | None) -> str:
+    value = str(ip_value or "")
+    if not value:
+        return ""
+    if ":" in value:
+        parts = value.split(":")
+        if len(parts) <= 2:
+            return value[:2] + "***"
+        return ":".join(parts[:2] + ["****"] + parts[-1:])
+    parts = value.split(".")
+    if len(parts) == 4:
+        return f"{parts[0]}.{parts[1]}.***.{parts[3]}"
+    if len(value) <= 6:
+        return value[0:1] + "***"
+    return value[:3] + "***" + value[-2:]
+
+
 def normalize_subscription_scope(scope: str | None) -> str:
     scope = (scope or "all").strip().lower()
     return scope if scope in SUBSCRIPTION_SCOPES else "all"
@@ -453,36 +549,60 @@ def build_clash_subscription_url(request: Request, scope: str = "all") -> str:
 
 
 
-def vless_link_with_name(link: str, name: str) -> str:
-    link = (link or "").strip()
-    name = (name or "").strip()
-    if not link or not name:
-        return link
-    try:
-        parsed = urllib.parse.urlparse(link)
-    except ValueError:
-        return link
-    if parsed.scheme != "vless":
-        return link
-    quoted_name = urllib.parse.quote(name, safe="")
-    return urllib.parse.urlunparse((
-        parsed.scheme,
-        parsed.netloc,
-        parsed.path,
-        parsed.params,
-        parsed.query,
-        quoted_name,
-    ))
+def display_protocol_label(protocol_type: str | None) -> str:
+    if protocol_type == PROTOCOL_TUNNEL:
+        return "tunnel"
+    if protocol_type == PROTOCOL_CHAIN:
+        return "chain"
+    return "vless"
 
 
-def display_vless_link_for_node(node: sqlite3.Row | dict[str, object]) -> str:
-    return vless_link_with_name(str(node["last_vless_link"] or ""), str(node["name"] or ""))
+def vless_link_with_node_remark(link: str, node: sqlite3.Row | dict[str, object], *, region_source_node: sqlite3.Row | dict[str, object] | None = None) -> str:
+    return replace_vless_fragment(link, vless_remark_for_node(node, allow_lookup=True, region_source_node=region_source_node))
+
+
+def build_tunnel_vless_link(node: sqlite3.Row | dict[str, object], *, generated_uuid: str | None = None, region_source_node: sqlite3.Row | dict[str, object] | None = None) -> str:
+    cf_host = str(node["cf_host"] or "").strip().strip("/")
+    if not cf_host:
+        return ""
+    uuid_value = (generated_uuid or str(node["generated_uuid"] or "")).strip()
+    if not uuid_value:
+        return ""
+    ws_path = str(node["ws_path"] or "/").strip() or "/"
+    if not ws_path.startswith("/"):
+        ws_path = f"/{ws_path}"
+    name = urllib.parse.quote(vless_remark_for_node(node, allow_lookup=True, region_source_node=region_source_node), safe="")
+    query = urllib.parse.urlencode(
+        {
+            "encryption": "none",
+            "security": "tls",
+            "type": "ws",
+            "host": cf_host,
+            "path": ws_path,
+            "sni": cf_host,
+        }
+    )
+    return f"vless://{uuid_value}@{cf_host}:443?{query}#{name}"
+
+
+def display_vless_link_for_node(node: sqlite3.Row | dict[str, object], node_by_id: dict[str, sqlite3.Row | dict[str, object]] | None = None) -> str:
+    region_source_node = None
+    if str(node["protocol_type"] or "") == PROTOCOL_CHAIN and node_by_id:
+        region_source_node = node_by_id.get(str(node["backend_node_id"] or ""))
+    if is_tunnel_protocol(str(node["protocol_type"] or "")):
+        link = build_tunnel_vless_link(node, region_source_node=region_source_node)
+        if link:
+            return link
+    return vless_link_with_node_remark(str(node["last_vless_link"] or ""), node, region_source_node=region_source_node)
 
 def build_subscription_payload(scope: str = "all") -> str:
     protocol_type = SUBSCRIPTION_SCOPES[normalize_subscription_scope(scope)]
+    nodes = list_subscribable_nodes(protocol_type)
+    all_nodes = list_nodes()
+    node_by_id = {node["node_id"]: node for node in all_nodes}
     links = []
-    for node in list_subscribable_nodes(protocol_type):
-        link = display_vless_link_for_node(node).strip()
+    for node in nodes:
+        link = display_vless_link_for_node(node, node_by_id).strip()
         if link:
             links.append(link)
     plain = "\n".join(links)
@@ -530,10 +650,13 @@ def _vless_link_to_clash_proxy(link: str) -> dict[str, object] | None:
 
 def build_clash_subscription_payload(scope: str = "all") -> str:
     protocol_type = SUBSCRIPTION_SCOPES[normalize_subscription_scope(scope)]
+    nodes = list_subscribable_nodes(protocol_type)
+    all_nodes = list_nodes()
+    node_by_id = {node["node_id"]: node for node in all_nodes}
     proxies = []
     seen_names: set[str] = set()
-    for node in list_subscribable_nodes(protocol_type):
-        link = display_vless_link_for_node(node).strip()
+    for node in nodes:
+        link = display_vless_link_for_node(node, node_by_id).strip()
         if not link:
             continue
         proxy = _vless_link_to_clash_proxy(link)
@@ -575,25 +698,30 @@ async def nodes_page(request: Request):
     for node in raw_nodes:
         badge_class, badge_text = compute_effective_badge(node, node_by_id)
         if node["protocol_type"] == PROTOCOL_CHAIN:
-            front = node_by_id.get(node["front_node_id"])
             backend = node_by_id.get(node["backend_node_id"])
-            front_region = manual_region_from_node(front) if front else None
-            if not front_region:
-                front_region = region_cache.setdefault(f"node:{node['front_node_id']}", lookup_ip_region(front["ip"] if front else ""))
-            backend_region = manual_region_from_node(backend) if backend else None
-            if not backend_region:
-                backend_region = region_cache.setdefault(f"node:{node['backend_node_id']}", lookup_ip_region(backend["ip"] if backend else ""))
-            region = {"code": "", "flag": f"{front_region.get('flag', '')}{backend_region.get('flag', '')}", "label": "链式节点"}
+            region = region_from_node(backend, allow_lookup=True) if backend else {"code": "", "flag": "🌐", "badge": "IP", "flag_codes": [], "label": "落地端未知"}
+            if region.get("label"):
+                region = {**region, "label": f"落地端：{region.get('label')}"}
         else:
-            manual_region = manual_region_from_node(node)
-            region = manual_region or region_cache.setdefault(node["ip"], lookup_ip_region(node["ip"]))
+            region = region_from_node(node, allow_lookup=True)
+        is_chain = bool(node["protocol_type"] == PROTOCOL_CHAIN)
+        masked_ip = mask_ip_for_list(node["ip"])
+        masked_entry_text = (
+            f"{node['front_node_name'] or node['front_node_id']} → {node['backend_node_name'] or node['backend_node_id']}"
+            if is_chain
+            else masked_ip
+        )
         nodes.append({
             "node_id": node["node_id"],
             "name": node["name"],
             "ip": node["ip"],
+            "masked_ip": masked_ip,
+            "masked_entry_text": masked_entry_text,
             "protocol_type": node["protocol_type"],
             "protocol_label": protocol_label(node["protocol_type"]),
             "region_flag": region.get("flag", ""),
+            "region_flag_codes": region.get("flag_codes", []),
+            "region_badge": region.get("badge", "") or region.get("code", ""),
             "region_code": region.get("code", ""),
             "region_label": region.get("label", ""),
             "front_node_id": node["front_node_id"],
@@ -602,10 +730,10 @@ async def nodes_page(request: Request):
             "backend_node_name": node["backend_node_name"],
             "badge_class": badge_class,
             "badge_text": badge_text,
-            "last_vless_link": display_vless_link_for_node(node),
+            "last_vless_link": display_vless_link_for_node(node, node_by_id),
             "tags": tag_map.get(node["node_id"], []),
             "can_reinstall": True,
-            "is_chain": bool(node["protocol_type"] == PROTOCOL_CHAIN),
+            "is_chain": is_chain,
         })
     direct_nodes = [node for node in nodes if not node["is_chain"]]
     chain_nodes = [node for node in nodes if node["is_chain"]]
@@ -626,10 +754,30 @@ async def nodes_page(request: Request):
             "subscription_url": subscription_urls["all"]["v2rayn"],
             "clash_subscription_url": subscription_urls["all"]["clash"],
             "subscription_urls": subscription_urls,
+            "subscription_state": get_subscription_token_state(),
             "tags": list_tags(),
             "tag_colors": TAG_COLORS,
         },
     )
+
+
+@app.post("/subscriptions/rotate-token")
+@login_required
+async def rotate_subscription_token_action(request: Request):
+    token_state = rotate_subscription_token()
+    new_token = token_state["subscription_token"]
+    subscription_urls = {
+        "all": {"v2rayn": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="all")), "clash": str(request.url_for("clash_subscription_feed", token=new_token).include_query_params(scope="all"))},
+        "direct": {"v2rayn": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="direct")), "clash": str(request.url_for("clash_subscription_feed", token=new_token).include_query_params(scope="direct"))},
+        "chain": {"v2rayn": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="chain")), "clash": str(request.url_for("clash_subscription_feed", token=new_token).include_query_params(scope="chain"))},
+    }
+    return JSONResponse({
+        "ok": True,
+        "subscription_token": new_token,
+        "previous_expires_at": token_state["previous_expires_at"],
+        "subscription_urls": subscription_urls,
+        "message": "订阅 token 已轮换。旧 token 将继续保留 24 小时可用，请尽快把客户端订阅更新为新链接。",
+    })
 
 
 @app.get("/sub/{token}", response_class=PlainTextResponse, name="subscription_feed")
@@ -671,7 +819,7 @@ async def node_create_page(request: Request):
     values["protocol_type"] = PROTOCOL_DIRECT
     return render_node_form(
         request,
-        title="新建 VLESS 单节点",
+        title="新建节点",
         mode="create",
         form_values=values,
         form_kind="direct",
@@ -704,6 +852,10 @@ async def node_create_submit(
     public_port: str = Form(""),
     listen_port: str = Form(""),
     protocol_type: str = Form(PROTOCOL_DIRECT),
+    cf_host: str = Form(""),
+    cf_tunnel_token: str = Form(""),
+    ws_port: str = Form("8080"),
+    ws_path: str = Form("/"),
     front_node_id: str = Form(""),
     backend_node_id: str = Form(""),
     manual_country_code: str = Form(""),
@@ -719,6 +871,10 @@ async def node_create_submit(
             "public_port": public_port,
             "listen_port": listen_port,
             "protocol_type": protocol_type,
+            "cf_host": cf_host,
+            "cf_tunnel_token": cf_tunnel_token,
+            "ws_port": ws_port,
+            "ws_path": ws_path,
             "front_node_id": front_node_id,
             "backend_node_id": backend_node_id,
             "manual_country_code": manual_country_code,
@@ -728,13 +884,13 @@ async def node_create_submit(
 
     if not errors:
         exists = find_node_by_endpoint(str(payload["ip"]), int(payload["ssh_port"]))
-        if exists and not is_chain_protocol(payload.get("protocol_type")):
+        if exists and is_direct_vless_protocol(payload.get("protocol_type")):
             errors.append("已存在相同 IP + SSH 端口 的节点记录")
 
     if errors:
         return render_node_form(
             request,
-            title="新建链式节点" if is_chain_protocol(payload.get("protocol_type")) else "新建 VLESS 单节点",
+            title="新建链式节点" if is_chain_protocol(payload.get("protocol_type")) else "新建节点",
             mode="create",
             form_values=payload,
             errors=errors,
@@ -816,8 +972,14 @@ def generate_chain_deployment(chain_node_id: str) -> tuple[str, str, str, dict[s
             raise ValueError("前置节点或后端节点不存在")
         if not front["last_vless_link"] or not front["generated_public_key"] or not front["generated_short_id"]:
             raise ValueError("前置节点还没有成功部署链接，不能生成链式入口")
-        if not backend["last_vless_link"] or not backend["generated_public_key"] or not backend["generated_short_id"]:
+        if not backend["last_vless_link"] or not backend["generated_uuid"]:
             raise ValueError("后端节点还没有成功部署链接，不能生成链式节点")
+        if backend["protocol_type"] == PROTOCOL_DIRECT and (not backend["generated_public_key"] or not backend["generated_short_id"]):
+            raise ValueError("Reality 后端节点还没有完整 Reality 参数，不能生成链式节点")
+        if backend["protocol_type"] == PROTOCOL_TUNNEL:
+            raise ValueError("tunnel 节点仅作为单节点使用，不支持作为链式落地端")
+        if backend["protocol_type"] != PROTOCOL_DIRECT:
+            raise ValueError("后端节点协议不支持链式落地，仅支持 VLESS + Reality")
 
         chain_uuid = chain["generated_uuid"] or str(uuid.uuid4())
         link = build_chain_link(dict(chain), dict(front), dict(backend), chain_uuid)
@@ -850,12 +1012,14 @@ def generate_chain_deployment(chain_node_id: str) -> tuple[str, str, str, dict[s
         )
         chain_tag = f"chain-{chain_node_id}"
         apply_log = apply_front_chain_config(dict(front), dict(backend), chain_tag=chain_tag, chain_uuid=chain_uuid)
-        summary = f"链式节点已真实下发：前置 {front['name']} 入口 {front['ip']}:{front['public_port']}，按链式用户路由到后端 {backend['name']}。"
+        backend_target = f"{backend['ip']}:{backend['public_port']}"
+        backend_protocol = "reality"
+        summary = f"链式节点已真实下发：前置 {front['name']} 入口 {front['ip']}:{front['public_port']}，按链式用户路由到后端 {backend['name']}（{backend_protocol} {backend_target}）。"
         raw = "\n".join(
             [
                 "[stage] chain-route-apply",
                 f"front_node={front['name']} {front['ip']}:{front['public_port']}",
-                f"backend_node={backend['name']} {backend['ip']}:{backend['public_port']}",
+                f"backend_node={backend['name']} {backend_protocol} {backend_target}",
                 f"chain_tag={chain_tag}",
                 f"chain_uuid={chain_uuid}",
                 apply_log,
@@ -876,7 +1040,7 @@ def mark_chain_deployment_success(deploy_id: str, summary: str, raw: str, link: 
             SET ended_at = ?, result = ?, failure_stage = ?, summary_log = ?, raw_log = ?, generated_vless_link = ?
             WHERE deploy_id = ?
             """,
-            (ts, "success", None, summary, raw, link, deploy_id),
+            (ts, "success", None, redact_sensitive_text(summary), redact_sensitive_text(raw), redact_sensitive_text(link), deploy_id),
         )
         conn.execute("UPDATE nodes SET status = ?, updated_at = ? WHERE node_id = ?", ("deployed", ts, deployment[0]))
 
@@ -893,7 +1057,7 @@ def mark_chain_deployment_failed(deploy_id: str, message: str) -> None:
             SET ended_at = ?, result = ?, failure_stage = ?, summary_log = ?, raw_log = ?
             WHERE deploy_id = ?
             """,
-            (ts, "failed", "chain_generate", message, f"[error] {message}", deploy_id),
+            (ts, "failed", "chain_generate", redact_sensitive_text(message), redact_sensitive_text(f"[error] {message}"), deploy_id),
         )
         conn.execute("UPDATE nodes SET status = ?, updated_at = ? WHERE node_id = ?", ("failed", ts, deployment[0]))
 
@@ -930,13 +1094,14 @@ async def node_detail_page(request: Request, node_id: str):
             "request": request,
             "title": node["name"],
             "node": node,
-            "display_vless_link": display_vless_link_for_node(node),
+            "display_vless_link": display_vless_link_for_node(node, node_by_id),
             "deployments": deployments,
             "badge_class": badge_class,
             "badge_text": badge_text,
             "report": report,
             "latest_deploy_id": latest_deploy_id,
             "is_chain": bool(node["protocol_type"] == PROTOCOL_CHAIN),
+            "is_tunnel": bool(node["protocol_type"] == PROTOCOL_TUNNEL),
             "protocol_label": protocol_label(node["protocol_type"]),
             "node_tags": tag_map.get(node_id, []) if (tag_map := list_node_tags_map()) else [],
         },
@@ -978,6 +1143,10 @@ async def node_edit_submit(
     public_port: str = Form(""),
     listen_port: str = Form(""),
     protocol_type: str = Form(PROTOCOL_DIRECT),
+    cf_host: str = Form(""),
+    cf_tunnel_token: str = Form(""),
+    ws_port: str = Form("8080"),
+    ws_path: str = Form("/"),
     front_node_id: str = Form(""),
     backend_node_id: str = Form(""),
     manual_country_code: str = Form(""),
@@ -1002,6 +1171,10 @@ async def node_edit_submit(
             "public_port": public_port,
             "listen_port": listen_port,
             "protocol_type": protocol_type,
+            "cf_host": cf_host,
+            "cf_tunnel_token": cf_tunnel_token,
+            "ws_port": ws_port,
+            "ws_path": ws_path,
             "front_node_id": front_node_id,
             "backend_node_id": backend_node_id,
             "manual_country_code": manual_country_code,
@@ -1016,7 +1189,7 @@ async def node_edit_submit(
             int(payload["ssh_port"]),
             exclude_node_id=node_id,
         )
-        if exists and not is_chain_protocol(payload.get("protocol_type")):
+        if exists and is_direct_vless_protocol(payload.get("protocol_type")):
             errors.append("已存在相同 IP + SSH 端口 的节点记录")
 
     if errors:
@@ -1030,7 +1203,14 @@ async def node_edit_submit(
             form_kind="chain" if is_chain_protocol(payload.get("protocol_type")) else "direct",
         )
 
-    payload["last_vless_link"] = vless_link_with_name(str(node["last_vless_link"] or ""), str(payload.get("name") or ""))
+    if is_tunnel_protocol(payload.get("protocol_type")):
+        existing = dict(node)
+        existing.update(payload)
+        payload["last_vless_link"] = build_tunnel_vless_link(existing) or str(node["last_vless_link"] or "")
+    else:
+        existing = dict(node)
+        existing.update(payload)
+        payload["last_vless_link"] = vless_link_with_node_remark(str(node["last_vless_link"] or ""), existing)
     update_node_record(node_id, payload)
     return RedirectResponse(url=f"/nodes/{node_id}", status_code=303)
 
@@ -1052,6 +1232,15 @@ async def tag_create_submit(request: Request, name: str = Form(...), color: str 
 @login_required
 async def tag_delete_submit(request: Request, tag_id: str):
     delete_tag(tag_id)
+    return RedirectResponse(url="/nodes", status_code=303)
+
+
+@app.post("/nodes/{node_id}/rename")
+@login_required
+async def node_rename_submit(request: Request, node_id: str, name: str = Form(...)):
+    new_name = name.strip()
+    if get_node(node_id) and new_name:
+        rename_node_record(node_id, new_name[:80])
     return RedirectResponse(url="/nodes", status_code=303)
 
 
