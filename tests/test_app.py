@@ -10,6 +10,7 @@ os.environ.setdefault("NAT_WEBUI_DB_PATH", f"/tmp/nat_webui_test_{uuid.uuid4().h
 
 from app import jobs, main
 from app.db import create_node_record, get_node, init_db, list_nodes
+from app.deployer import build_remote_script
 from app.main import app
 
 init_db()
@@ -157,6 +158,22 @@ def test_create_reinstall_and_delete_node_flow(monkeypatch) -> None:
     missing = client.get(detail_url)
     assert missing.status_code == 404
     assert "节点不存在" in missing.text
+
+
+def test_remote_script_supports_debian_systemd() -> None:
+    script = build_remote_script(
+        {"ip": "192.0.2.10"},
+        singbox_config="{}",
+        node_meta="{}",
+        agent_script="# agent\n",
+        singbox_archive_url="https://example.com/sing-box.tar.gz",
+        singbox_archive_name="sing-box.tar.gz",
+    )
+    assert "apt-get install -y -qq" in script
+    assert "/etc/systemd/system/sing-box.service" in script
+    assert "systemctl restart sing-box" in script
+    assert "systemctl enable --now cron" in script
+    assert "sing-box.natctl-old" in script
 
 
 def test_create_node_rejects_duplicate_ip_and_ssh_port() -> None:

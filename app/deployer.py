@@ -192,8 +192,23 @@ def build_agent_script(node: dict) -> str:
           echo "missing meta file" >&2
           exit 1
         fi
+        ensure_pkg() {{
+          pkg="$1"
+          if command -v apk >/dev/null 2>&1; then
+            apk add --no-cache "$pkg" >/dev/null
+          elif command -v apt-get >/dev/null 2>&1; then
+            apt-get update -qq >/dev/null
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$pkg" >/dev/null
+          else
+            echo "missing dependency $pkg and no supported package manager found" >&2
+            exit 1
+          fi
+        }}
         if ! command -v curl >/dev/null 2>&1; then
-          apk add --no-cache curl >/dev/null
+          ensure_pkg curl
+        fi
+        if ! command -v python3 >/dev/null 2>&1; then
+          ensure_pkg python3
         fi
         hostname_val=$(hostname 2>/dev/null || echo unknown)
         report_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -240,12 +255,49 @@ def build_remote_script(node: dict, *, singbox_config: str, node_meta: str, agen
         }
         """
     )
+    systemd_unit = textwrap.dedent(
+        """\
+        [Unit]
+        Description=sing-box NAT WebUI VLESS Reality service
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=simple
+        ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+        Restart=always
+        RestartSec=3
+        LimitNOFILE=1048576
+
+        [Install]
+        WantedBy=multi-user.target
+        """
+    )
     return textwrap.dedent(
         f"""\
         set -eu
         mkdir -p {shell_quote(REMOTE_BIN_DIR)} {shell_quote(REMOTE_AGENT_DIR)} {shell_quote(REMOTE_STATE_DIR)} {shell_quote(REMOTE_LOG_DIR)} {shell_quote(REMOTE_SINGBOX_DIR)} /tmp/natctl-singbox
-        if ! command -v curl >/dev/null 2>&1; then
-          apk add --no-cache curl >/dev/null
+        ensure_pkg() {{
+          pkg="$1"
+          if command -v apk >/dev/null 2>&1; then
+            apk add --no-cache "$pkg" >/dev/null
+          elif command -v apt-get >/dev/null 2>&1; then
+            apt-get update -qq >/dev/null
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$pkg" >/dev/null
+          else
+            echo "ERROR: missing dependency $pkg and no supported package manager found"
+            exit 1
+          fi
+        }}
+        command -v curl >/dev/null 2>&1 || ensure_pkg curl
+        command -v tar >/dev/null 2>&1 || ensure_pkg tar
+        command -v python3 >/dev/null 2>&1 || ensure_pkg python3
+        if ! command -v crontab >/dev/null 2>&1; then
+          if command -v apk >/dev/null 2>&1; then
+            ensure_pkg busybox-suid
+          elif command -v apt-get >/dev/null 2>&1; then
+            ensure_pkg cron
+          fi
         fi
         if ! command -v sing-box >/dev/null 2>&1; then
           echo 'INFO: sing-box missing, downloading release package'
@@ -265,19 +317,46 @@ Path({REMOTE_MARK_FILE!r}).write_text({(MARK_CONTENT + chr(10))!r})
 Path({REMOTE_SINGBOX_CONFIG!r}).write_text({(singbox_config + chr(10))!r})
 Path({REMOTE_META_FILE!r}).write_text({(node_meta + chr(10))!r})
 Path({REMOTE_AGENT_SCRIPT!r}).write_text({agent_script!r})
-Path('/etc/init.d/sing-box').write_text({openrc_script!r})
+if Path('/sbin/openrc-run').exists():
+    Path('/etc/init.d/sing-box').write_text({openrc_script!r})
+if Path('/bin/systemctl').exists() or Path('/usr/bin/systemctl').exists():
+    Path('/etc/systemd/system/sing-box.service').write_text({systemd_unit!r})
 PYEOF
-        chmod +x {shell_quote(REMOTE_AGENT_SCRIPT)} /etc/init.d/sing-box
+        chmod +x {shell_quote(REMOTE_AGENT_SCRIPT)}
         if command -v rc-service >/dev/null 2>&1; then
+          chmod +x /etc/init.d/sing-box
           rc-update add sing-box default >/dev/null 2>&1 || true
           rc-service sing-box restart >/dev/null 2>&1 || rc-service sing-box start >/dev/null 2>&1
+        elif command -v systemctl >/dev/null 2>&1; then
+          if [ -f /etc/init.d/sing-box ]; then
+            mv /etc/init.d/sing-box /etc/init.d/sing-box.natctl-old-$(date +%Y%m%d-%H%M%S)
+          fi
+          systemctl daemon-reload
+          systemctl enable sing-box >/dev/null 2>&1 || true
+          systemctl restart sing-box
         else
-          /usr/local/bin/sing-box run -c /etc/sing-box/config.json >/opt/natctl/logs/sing-box.log 2>&1 &
+          pids=$(pgrep -f '/usr/local/bin/sing-box run -c /etc/sing-box/config.json' 2>/dev/null || true)
+          if [ -n "$pids" ]; then
+            kill $pids 2>/dev/null || true
+          fi
+          nohup /usr/local/bin/sing-box run -c /etc/sing-box/config.json >/opt/natctl/logs/sing-box.log 2>&1 &
         fi
-        (crontab -l 2>/dev/null | grep -v 'NAT-WEBUI-AGENT' | grep -v '/opt/natctl/agent/report.sh'; \
-          echo '# BEGIN NAT-WEBUI-AGENT'; \
-          echo {shell_quote(cron_block)}; \
-          echo '# END NAT-WEBUI-AGENT') | crontab -
+        if command -v crontab >/dev/null 2>&1; then
+          (crontab -l 2>/dev/null | grep -v 'NAT-WEBUI-AGENT' | grep -v '/opt/natctl/agent/report.sh'; \
+            echo '# BEGIN NAT-WEBUI-AGENT'; \
+            echo {shell_quote(cron_block)}; \
+            echo '# END NAT-WEBUI-AGENT') | crontab -
+        else
+          echo 'WARN: crontab not found, agent report schedule was not installed'
+        fi
+        if command -v systemctl >/dev/null 2>&1; then
+          systemctl enable --now cron >/dev/null 2>&1 || systemctl enable --now crond >/dev/null 2>&1 || true
+        fi
+        {shell_quote(REMOTE_AGENT_SCRIPT)} || true
+        if command -v systemctl >/dev/null 2>&1; then
+          systemctl is-active sing-box || true
+          systemctl is-enabled sing-box || true
+        fi
         echo 'OK: deploy finished'
         """
     )
@@ -335,7 +414,7 @@ def run_real_deploy(node: dict) -> DeployResult:
         raise DeployError("ssh_probe", "SSH 连接失败", raw)
 
     try:
-        add("system_probe", executor.run("uname -a && cat /etc/alpine-release", timeout=30))
+        add("system_probe", executor.run("uname -a; cat /etc/os-release 2>/dev/null || cat /etc/alpine-release 2>/dev/null || true; command -v systemctl >/dev/null 2>&1 && echo init=systemd || true; command -v rc-service >/dev/null 2>&1 && echo init=openrc || true", timeout=30))
     except Exception as exc:
         raw = "\n".join(logs + [f"System probe failed: {exc}"])
         raise DeployError("system_probe", "系统探测失败", raw)

@@ -44,7 +44,18 @@ uvicorn app.main:app --host 0.0.0.0 --port 8788
 
 适合直接导入 v2rayN / NekoBox 等客户端，并通过“更新订阅”同步新增或变更节点。
 
+## 兼容性说明
+
+当前远端部署脚本优先保证可用性：
+
+- Alpine / OpenRC：写入 `/etc/init.d/sing-box`，通过 `rc-update` 和 `rc-service` 托管。
+- Debian / Ubuntu / systemd：写入 `/etc/systemd/system/sing-box.service`，通过 `systemctl enable --now sing-box` 托管。
+- 依赖安装会按系统自动选择 `apk` 或 `apt-get`，覆盖 `curl`、`tar`、`python3`、`cron/crontab` 等基础依赖。
+- agent 上报脚本会写入 `/opt/natctl/agent/report.sh`，并通过 crontab 每 5 分钟上报一次在线状态。
+- 在 systemd 机器上，如存在旧的 `/etc/init.d/sing-box`，部署时会自动改名备份，避免 systemd-sysv-generator 生成冲突服务导致 sing-box 无法正常 enable/start。
+
 ## 注意
 
 - `data/*.db` 与 `logs/*.log` 已默认忽略，不应提交运行期数据
 - 仓库默认配置仅用于开发占位，正式环境请务必用环境变量覆盖管理员账号、密码与 session secret
+
