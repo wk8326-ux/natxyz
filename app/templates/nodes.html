@@ -104,9 +104,17 @@
   {% endif %}
 {%- endmacro %}
 
+{% block topbar_actions %}
+<script type="application/json" id="subscriptionUrlsJson">{{ subscription_urls | tojson }}</script>
+<div class="top-sub-actions" aria-label="当前分类订阅">
+  <button class="icon-btn sub-brand-icon" type="button" title="复制当前分类 v2rayN 订阅 URL" aria-label="复制当前分类 v2rayN 订阅 URL" data-current-sub data-sub-kind="v2rayn"><img src="/static/icons/v2rayn.png" alt="" aria-hidden="true"></button>
+  <button class="icon-btn sub-brand-icon" type="button" title="复制当前分类 Clash 订阅 URL" aria-label="复制当前分类 Clash 订阅 URL" data-current-sub data-sub-kind="clash"><img src="/static/icons/clash.png" alt="" aria-hidden="true"></button>
+  <button class="icon-btn rotate-token-icon" type="button" id="rotateSubscriptionToken" title="轮换订阅 token" aria-label="轮换订阅 token">⟳</button>
+</div>
+{% endblock %}
+
 {% block content %}
 <section class="panel">
-  <script type="application/json" id="subscriptionUrlsJson">{{ subscription_urls | tojson }}</script>
   <div class="panel-head node-list-head">
     <div>
       <div class="panel-title">节点列表</div>
@@ -116,21 +124,13 @@
 
   <div class="node-toolbar" aria-label="节点管理工具区">
     <div class="toolbar-main-row">
-      <div class="toolbar-create-actions">
-        <a class="link-btn" href="/nodes/new">新建节点</a>
-        <a class="link-btn" href="/nodes/new-chain">新建链式节点</a>
-      </div>
-      <div class="toolbar-sub-actions" aria-label="当前分类订阅">
-        <button class="icon-btn sub-brand-icon" type="button" title="复制当前分类 v2rayN 订阅 URL" aria-label="复制当前分类 v2rayN 订阅 URL" data-current-sub data-sub-kind="v2rayn"><img src="/static/icons/v2rayn.png" alt="" aria-hidden="true"></button>
-        <button class="icon-btn sub-brand-icon" type="button" title="复制当前分类 Clash 订阅 URL" aria-label="复制当前分类 Clash 订阅 URL" data-current-sub data-sub-kind="clash"><img src="/static/icons/clash.png" alt="" aria-hidden="true"></button>
-        <button class="icon-btn rotate-token-icon" type="button" id="rotateSubscriptionToken" title="轮换订阅 token" aria-label="轮换订阅 token">⟳</button>
-      </div>
-    </div>
-
-    <div class="toolbar-tabs-row">
       <div class="node-tabs" role="tablist" aria-label="节点分类">
         <button class="node-tab is-active" type="button" data-tab-target="direct" role="tab" aria-selected="true">直连 <span>{{ direct_nodes|length }}</span></button>
         <button class="node-tab" type="button" data-tab-target="chain" role="tab" aria-selected="false">链式 <span>{{ chain_nodes|length }}</span></button>
+      </div>
+      <div class="toolbar-create-actions">
+        <a class="link-btn" href="/nodes/new">新建节点</a>
+        <a class="link-btn" href="/nodes/new-chain">新建链式节点</a>
       </div>
     </div>
 
