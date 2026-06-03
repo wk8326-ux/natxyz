@@ -504,7 +504,7 @@ def build_install_command(node: dict | object) -> str:
 
 SUBSCRIPTION_SCOPES = {
     "all": None,
-    "direct": PROTOCOL_DIRECT,
+    "direct": (PROTOCOL_DIRECT, PROTOCOL_TUNNEL),
     "chain": PROTOCOL_CHAIN,
 }
 

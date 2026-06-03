@@ -207,15 +207,17 @@ def list_chain_backend_nodes() -> list[sqlite3.Row]:
         ).fetchall()
 
 
-def list_subscribable_nodes(protocol_type: str | None = None) -> list[sqlite3.Row]:
+def list_subscribable_nodes(protocol_type: str | Sequence[str] | None = None) -> list[sqlite3.Row]:
     query = """
         SELECT * FROM nodes
         WHERE TRIM(COALESCE(last_vless_link, '')) != ''
     """
     params: list[Any] = []
     if protocol_type:
-        query += " AND protocol_type = ?"
-        params.append(protocol_type)
+        protocol_types = [protocol_type] if isinstance(protocol_type, str) else list(protocol_type)
+        placeholders = ",".join("?" for _ in protocol_types)
+        query += f" AND protocol_type IN ({placeholders})"
+        params.extend(protocol_types)
     query += " ORDER BY updated_at DESC, created_at DESC"
     with get_conn() as conn:
         return conn.execute(query, tuple(params)).fetchall()
