@@ -106,75 +106,71 @@
 
 {% block content %}
 <section class="panel">
-  <div class="panel-head">
-      <div>
-        <div class="panel-title">节点列表</div>
-        <div class="panel-subtitle">直连和链式分开管理；订阅按钮随当前分类独立复制。</div>
-      </div>
-
-    <div class="panel-actions">
-      <div class="compact-sub-actions" aria-label="全部订阅">
-        <span class="compact-label">全部</span>
-        {{ subscription_buttons(subscription_urls.all, '全部', 'all') }}
-      </div>
-      <button class="ghost-btn" type="button" id="rotateSubscriptionToken">轮换订阅 token</button>
-      <a class="ghost-btn link-plain" href="/nodes/new-chain">新建链式节点</a>
-      <a class="link-btn" href="/nodes/new">新建节点</a>
+  <script type="application/json" id="subscriptionUrlsJson">{{ subscription_urls | tojson }}</script>
+  <div class="panel-head node-list-head">
+    <div>
+      <div class="panel-title">节点列表</div>
+      <div class="panel-subtitle">直连和链式分组管理；订阅按分类独立复制。</div>
     </div>
   </div>
 
-  <div class="subscription-token-note">
-    当前 token：<code>{{ subscription_state.subscription_token[:8] }}…{{ subscription_state.subscription_token[-6:] }}</code>
-    {% if subscription_state.previous_token and subscription_state.previous_expires_at %}
-      <span>旧 token 保留至 {{ subscription_state.previous_expires_at[:19].replace('T', ' ') }} UTC。</span>
-    {% endif %}
-  </div>
+  <div class="node-toolbar" aria-label="节点管理工具区">
+    <div class="toolbar-main-row">
+      <div class="toolbar-create-actions">
+        <a class="link-btn" href="/nodes/new">新建节点</a>
+        <a class="link-btn" href="/nodes/new-chain">新建链式节点</a>
+      </div>
+      <div class="toolbar-sub-actions" aria-label="当前分类订阅">
+        <button class="icon-btn sub-brand-icon" type="button" title="复制当前分类 v2rayN 订阅 URL" aria-label="复制当前分类 v2rayN 订阅 URL" data-current-sub data-sub-kind="v2rayn"><img src="/static/icons/v2rayn.png" alt="" aria-hidden="true"></button>
+        <button class="icon-btn sub-brand-icon" type="button" title="复制当前分类 Clash 订阅 URL" aria-label="复制当前分类 Clash 订阅 URL" data-current-sub data-sub-kind="clash"><img src="/static/icons/clash.png" alt="" aria-hidden="true"></button>
+        <button class="icon-btn rotate-token-icon" type="button" id="rotateSubscriptionToken" title="轮换订阅 token" aria-label="轮换订阅 token">⟳</button>
+      </div>
+    </div>
 
-  <div class="node-tabs" role="tablist" aria-label="节点分类">
-    <button class="node-tab is-active" type="button" data-tab-target="direct" role="tab" aria-selected="true">直连 <span>{{ direct_nodes|length }}</span></button>
-    <button class="node-tab" type="button" data-tab-target="chain" role="tab" aria-selected="false">链式 <span>{{ chain_nodes|length }}</span></button>
-  </div>
+    <div class="toolbar-tabs-row">
+      <div class="node-tabs" role="tablist" aria-label="节点分类">
+        <button class="node-tab is-active" type="button" data-tab-target="direct" role="tab" aria-selected="true">直连 <span>{{ direct_nodes|length }}</span></button>
+        <button class="node-tab" type="button" data-tab-target="chain" role="tab" aria-selected="false">链式 <span>{{ chain_nodes|length }}</span></button>
+      </div>
+    </div>
 
-  <div class="tag-toolbar">
-    <details class="tag-add-popover">
-      <summary class="small-btn">+ 标签</summary>
-      <form class="tag-create-form" method="post" action="/tags">
-        <input type="text" name="name" placeholder="落地 / 线路 / CN2" maxlength="20">
-        <div class="color-dots">
-          {% for color in tag_colors %}
-            <label class="color-dot" style="--tag-color: {{ color }}" title="{{ color }}">
-              <input type="radio" name="color" value="{{ color }}" {% if loop.first %}checked{% endif %}>
-              <span></span>
-            </label>
-          {% endfor %}
-        </div>
-        <button class="small-btn primary-small" type="submit">添加</button>
-      </form>
-    </details>
-
-    {% if tags %}
-    <div class="tag-manager">
-      {% for tag in tags %}
-        <form method="post" action="/tags/{{ tag.tag_id }}/delete" onsubmit="return confirm('删除标签 {{ tag.name }}？');">
-          <span class="tag-chip" style="--tag-color: {{ tag.color }}">{{ tag.name }}</span>
-          <button class="tag-delete" type="submit" title="删除标签">×</button>
+    <div class="toolbar-tags-row">
+      <details class="tag-add-popover">
+        <summary class="small-btn">+ 标签</summary>
+        <form class="tag-create-form" method="post" action="/tags">
+          <input type="text" name="name" placeholder="YUN / 家宽 / 线路" maxlength="20">
+          <div class="color-dots">
+            {% for color in tag_colors %}
+              <label class="color-dot" style="--tag-color: {{ color }}" title="{{ color }}">
+                <input type="radio" name="color" value="{{ color }}" {% if loop.first %}checked{% endif %}>
+                <span></span>
+              </label>
+            {% endfor %}
+          </div>
+          <button class="small-btn primary-small" type="submit">添加</button>
         </form>
-      {% endfor %}
+      </details>
+
+      {% if tags %}
+      <div class="tag-manager">
+        {% for tag in tags %}
+          <form method="post" action="/tags/{{ tag.tag_id }}/delete" onsubmit="return confirm('删除标签 {{ tag.name }}？');">
+            <span class="tag-chip" style="--tag-color: {{ tag.color }}">{{ tag.name }}</span>
+            <button class="tag-delete" type="submit" title="删除标签">×</button>
+          </form>
+        {% endfor %}
+      </div>
+      {% else %}
+      <span class="muted-small">暂无标签</span>
+      {% endif %}
     </div>
-    {% else %}
-    <span class="muted-small">暂无标签</span>
-    {% endif %}
   </div>
 
   <div class="node-tab-panel is-active" data-tab-panel="direct" role="tabpanel">
     <div class="tab-panel-head">
       <div>
         <div class="tab-title">直连节点</div>
-        <div class="panel-subtitle">普通 VLESS + Reality 入口。</div>
-      </div>
-      <div class="compact-sub-actions">
-        <span class="compact-label">订阅</span>
-        {{ subscription_buttons(subscription_urls.direct, '直连', 'direct') }}
+        <div class="panel-subtitle">普通 VLESS + Reality / Cloudflare WS 入口。</div>
       </div>
     </div>
     {{ node_table(direct_nodes, '暂无直连节点。') }}
@@ -186,22 +182,51 @@
         <div class="tab-title">链式节点</div>
         <div class="panel-subtitle">前置入口 → 后端落地。</div>
       </div>
-      <div class="compact-sub-actions">
-        <span class="compact-label">订阅</span>
-        {{ subscription_buttons(subscription_urls.chain, '链式', 'chain') }}
-      </div>
     </div>
     {{ node_table(chain_nodes, '暂无链式节点。') }}
   </div>
 </section>
 
+<div class="modal-backdrop" id="rotateTokenModal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="rotateTokenTitle">
+    <div class="modal-kicker">Subscription token</div>
+    <div class="modal-title" id="rotateTokenTitle">确认轮换订阅 token？</div>
+    <div class="modal-copy" id="rotateTokenMessage">
+      轮换后，当前 token 会在 24 小时后失效。请尽快把 v2rayN / Clash 客户端里的订阅链接更新为新 token。
+    </div>
+    <div class="modal-token-note" id="rotateTokenResult" hidden></div>
+    <div class="modal-actions">
+      <button class="ghost-btn" type="button" id="rotateTokenCancel">取消</button>
+      <button class="link-btn" type="button" id="rotateTokenConfirm">确认轮换</button>
+      <button class="link-btn" type="button" id="rotateTokenClose" hidden>知道了</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function () {
   const tabs = Array.from(document.querySelectorAll('.node-tab'));
   const panels = Array.from(document.querySelectorAll('.node-tab-panel'));
+  const subscriptionUrls = JSON.parse(document.getElementById('subscriptionUrlsJson')?.textContent || '{}');
+  let activeScope = 'direct';
+
+  function updateCurrentSubscriptionButtons() {
+    document.querySelectorAll('[data-current-sub]').forEach((button) => {
+      const kind = button.dataset.subKind || 'v2rayn';
+      const nextUrl = subscriptionUrls?.[activeScope]?.[kind];
+      const label = activeScope === 'chain' ? '链式' : '直连';
+      button.dataset.subScope = activeScope;
+      button.title = `复制${label} ${kind === 'clash' ? 'Clash' : 'v2rayN'} 订阅 URL`;
+      button.setAttribute('aria-label', button.title);
+      button.onclick = () => copyText(nextUrl || '', button);
+      button.disabled = !nextUrl;
+    });
+  }
+
   tabs.forEach((tab) => {
     tab.addEventListener('click', () => {
       const target = tab.dataset.tabTarget;
+      activeScope = target === 'chain' ? 'chain' : 'direct';
       tabs.forEach((item) => {
         const active = item === tab;
         item.classList.toggle('is-active', active);
@@ -212,38 +237,66 @@
         panel.classList.toggle('is-active', active);
         panel.hidden = !active;
       });
+      updateCurrentSubscriptionButtons();
     });
   });
+  updateCurrentSubscriptionButtons();
 
   const rotateButton = document.getElementById('rotateSubscriptionToken');
-  if (rotateButton) {
-    rotateButton.addEventListener('click', async () => {
-      const confirmed = confirm('确认手动轮换订阅 token？\n\n旧 token 会继续保留 24 小时可用，但你需要尽快把客户端订阅换成新链接。');
-      if (!confirmed) return;
-      const originalText = rotateButton.textContent;
-      rotateButton.disabled = true;
-      rotateButton.textContent = '轮换中…';
+  const rotateModal = document.getElementById('rotateTokenModal');
+  const rotateCancel = document.getElementById('rotateTokenCancel');
+  const rotateConfirm = document.getElementById('rotateTokenConfirm');
+  const rotateClose = document.getElementById('rotateTokenClose');
+  const rotateMessage = document.getElementById('rotateTokenMessage');
+  const rotateResult = document.getElementById('rotateTokenResult');
+
+  function openRotateModal() {
+    if (!rotateModal) return;
+    rotateModal.hidden = false;
+    rotateConfirm.hidden = false;
+    rotateCancel.hidden = false;
+    rotateClose.hidden = true;
+    rotateConfirm.disabled = false;
+    rotateConfirm.textContent = '确认轮换';
+    rotateMessage.textContent = '轮换后，当前 token 会在 24 小时后失效。请尽快把 v2rayN / Clash 客户端里的订阅链接更新为新 token。';
+    rotateResult.hidden = true;
+    rotateResult.textContent = '';
+  }
+
+  function closeRotateModal() {
+    if (rotateModal) rotateModal.hidden = true;
+  }
+
+  if (rotateButton && rotateModal && rotateConfirm) {
+    rotateButton.addEventListener('click', openRotateModal);
+    rotateCancel?.addEventListener('click', closeRotateModal);
+    rotateClose?.addEventListener('click', closeRotateModal);
+    rotateModal.addEventListener('click', (event) => {
+      if (event.target === rotateModal) closeRotateModal();
+    });
+    rotateConfirm.addEventListener('click', async () => {
+      rotateConfirm.disabled = true;
+      rotateConfirm.textContent = '轮换中…';
       try {
         const response = await fetch('/subscriptions/rotate-token', { method: 'POST', headers: { 'Accept': 'application/json' } });
         const data = await response.json();
         if (!response.ok || !data.ok) {
           throw new Error(data.detail || data.message || 'token 轮换失败');
         }
-        document.querySelectorAll('[data-sub-url]').forEach((button) => {
-          const scope = button.dataset.subScope || 'all';
-          const kind = button.dataset.subKind || 'v2rayn';
-          const nextUrl = data.subscription_urls?.[scope]?.[kind];
-          if (nextUrl) {
-            button.setAttribute('onclick', `copyText(${JSON.stringify(nextUrl)}, this)`);
-          }
-        });
-        alert(data.message || '订阅 token 已轮换。旧 token 将继续保留 24 小时可用，请尽快更新客户端订阅。');
-        window.location.reload();
+        if (data.subscription_urls) {
+          Object.assign(subscriptionUrls, data.subscription_urls);
+          updateCurrentSubscriptionButtons();
+        }
+        rotateMessage.textContent = data.message || '订阅 token 已轮换。旧 token 将继续保留 24 小时可用，请尽快更新客户端订阅。';
+        rotateResult.hidden = false;
+        rotateResult.innerHTML = `当前 token：<code>${data.subscription_token.slice(0, 8)}…${data.subscription_token.slice(-6)}</code>${data.previous_expires_at ? `<span>旧 token 保留至 ${data.previous_expires_at.slice(0, 19).replace('T', ' ')} UTC。</span>` : ''}`;
+        rotateConfirm.hidden = true;
+        rotateCancel.hidden = true;
+        rotateClose.hidden = false;
       } catch (err) {
-        alert(err.message || 'token 轮换失败');
-      } finally {
-        rotateButton.disabled = false;
-        rotateButton.textContent = originalText;
+        rotateMessage.textContent = err.message || 'token 轮换失败';
+        rotateConfirm.disabled = false;
+        rotateConfirm.textContent = '重试';
       }
     });
   }
