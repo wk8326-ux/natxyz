@@ -376,7 +376,7 @@ def build_remote_script(node: dict, *, singbox_config: str, node_meta: str, agen
         elif command -v apt-get >/dev/null 2>&1; then
           export DEBIAN_FRONTEND=noninteractive
           apt-get update -y >/dev/null
-          apt-get install -y curl ca-certificates tar gzip python3 coreutils iproute2 >/dev/null
+          apt-get install -y curl ca-certificates tar gzip python3 coreutils iproute2 cron >/dev/null
         else
           echo 'ERROR: unsupported package manager'
           exit 1
@@ -416,6 +416,9 @@ PYEOF
           systemctl daemon-reload >/dev/null 2>&1 || true
           systemctl enable sing-box >/dev/null 2>&1 || true
           systemctl restart sing-box >/dev/null 2>&1
+          if command -v crontab >/dev/null 2>&1; then
+            systemctl enable --now cron >/dev/null 2>&1 || systemctl enable --now crond >/dev/null 2>&1 || true
+          fi
           sleep 1
           if ! systemctl is-active --quiet sing-box; then
             echo 'ERROR: sing-box systemd service is not active'
@@ -449,10 +452,15 @@ PYEOF
             exit 1
           fi
         fi
-        (crontab -l 2>/dev/null | grep -v 'NAT-WEBUI-AGENT' | grep -v '/opt/natctl/agent/report.sh'; \
-          echo '# BEGIN NAT-WEBUI-AGENT'; \
-          echo {shell_quote(cron_block)}; \
-          echo '# END NAT-WEBUI-AGENT') | crontab -
+        if command -v crontab >/dev/null 2>&1; then
+          (crontab -l 2>/dev/null | grep -v 'NAT-WEBUI-AGENT' | grep -v '/opt/natctl/agent/report.sh'; \
+            echo '# BEGIN NAT-WEBUI-AGENT'; \
+            echo {shell_quote(cron_block)}; \
+            echo '# END NAT-WEBUI-AGENT') | crontab -
+        else
+          echo 'WARN: crontab unavailable, run one-shot agent report only'
+        fi
+        {shell_quote(REMOTE_AGENT_SCRIPT)} >/opt/natctl/logs/agent-once.log 2>&1 || true
         echo 'OK: deploy finished'
         """
     )
