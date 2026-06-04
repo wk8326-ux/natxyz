@@ -350,16 +350,33 @@ def build_remote_script(node: dict, *, singbox_config: str, node_meta: str, agen
         }
         """
     )
+    systemd_script = textwrap.dedent(
+        """\
+        [Unit]
+        Description=sing-box NAT WebUI service
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+        Restart=on-failure
+        RestartSec=3
+        LimitNOFILE=1048576
+
+        [Install]
+        WantedBy=multi-user.target
+        """
+    )
     return textwrap.dedent(
         f"""\
         set -eu
         mkdir -p {shell_quote(REMOTE_BIN_DIR)} {shell_quote(REMOTE_AGENT_DIR)} {shell_quote(REMOTE_STATE_DIR)} {shell_quote(REMOTE_LOG_DIR)} {shell_quote(REMOTE_SINGBOX_DIR)} /tmp/natctl-singbox
         if command -v apk >/dev/null 2>&1; then
-          apk add --no-cache curl ca-certificates tar gzip python3 coreutils >/dev/null
+          apk add --no-cache curl ca-certificates tar gzip python3 coreutils iproute2 >/dev/null
         elif command -v apt-get >/dev/null 2>&1; then
           export DEBIAN_FRONTEND=noninteractive
           apt-get update -y >/dev/null
-          apt-get install -y curl ca-certificates tar gzip python3 coreutils >/dev/null
+          apt-get install -y curl ca-certificates tar gzip python3 coreutils iproute2 cron >/dev/null
         else
           echo 'ERROR: unsupported package manager'
           exit 1
@@ -387,18 +404,63 @@ Path({REMOTE_SINGBOX_CONFIG!r}).write_text({(singbox_config + chr(10))!r})
 Path({REMOTE_META_FILE!r}).write_text({(node_meta + chr(10))!r})
 Path({REMOTE_AGENT_SCRIPT!r}).write_text({agent_script!r})
 Path('/etc/init.d/sing-box').write_text({openrc_script!r})
+Path('/etc/systemd/system/sing-box.service').write_text({systemd_script!r})
 PYEOF
         chmod +x {shell_quote(REMOTE_AGENT_SCRIPT)} /etc/init.d/sing-box
-        if command -v rc-service >/dev/null 2>&1; then
+        if ! /usr/local/bin/sing-box check -c /etc/sing-box/config.json >/opt/natctl/logs/sing-box-check.log 2>&1; then
+          echo 'ERROR: sing-box config check failed'
+          cat /opt/natctl/logs/sing-box-check.log
+          exit 1
+        fi
+        if command -v systemctl >/dev/null 2>&1; then
+          systemctl daemon-reload >/dev/null 2>&1 || true
+          systemctl enable sing-box >/dev/null 2>&1 || true
+          systemctl restart sing-box >/dev/null 2>&1
+          if command -v crontab >/dev/null 2>&1; then
+            systemctl enable --now cron >/dev/null 2>&1 || systemctl enable --now crond >/dev/null 2>&1 || true
+          fi
+          sleep 1
+          if ! systemctl is-active --quiet sing-box; then
+            echo 'ERROR: sing-box systemd service is not active'
+            systemctl status sing-box --no-pager 2>/dev/null || true
+            journalctl -u sing-box -n 80 --no-pager 2>/dev/null || true
+            exit 1
+          fi
+        elif command -v rc-service >/dev/null 2>&1; then
           rc-update add sing-box default >/dev/null 2>&1 || true
           rc-service sing-box restart >/dev/null 2>&1 || rc-service sing-box start >/dev/null 2>&1
+          sleep 1
+          if ! rc-service sing-box status >/dev/null 2>&1; then
+            echo 'ERROR: sing-box OpenRC service is not running'
+            tail -80 /opt/natctl/logs/sing-box.log 2>/dev/null || true
+            exit 1
+          fi
         else
-          /usr/local/bin/sing-box run -c /etc/sing-box/config.json >/opt/natctl/logs/sing-box.log 2>&1 &
+          pkill -f 'sing-box run -c /etc/sing-box/config.json' 2>/dev/null || true
+          nohup /usr/local/bin/sing-box run -c /etc/sing-box/config.json >/opt/natctl/logs/sing-box.log 2>&1 &
+          sleep 1
+          if ! pgrep -f 'sing-box run -c /etc/sing-box/config.json' >/dev/null 2>&1; then
+            echo 'ERROR: sing-box process exited after start'
+            tail -80 /opt/natctl/logs/sing-box.log 2>/dev/null || true
+            exit 1
+          fi
         fi
-        (crontab -l 2>/dev/null | grep -v 'NAT-WEBUI-AGENT' | grep -v '/opt/natctl/agent/report.sh'; \
-          echo '# BEGIN NAT-WEBUI-AGENT'; \
-          echo {shell_quote(cron_block)}; \
-          echo '# END NAT-WEBUI-AGENT') | crontab -
+        if command -v ss >/dev/null 2>&1; then
+          if ! ss -ltn | awk '{{print $4}}' | grep -Eq '(^|:){int(node["listen_port"])}$'; then
+            echo 'ERROR: sing-box is not listening on port {int(node["listen_port"])}'
+            ss -ltnp 2>/dev/null || ss -ltn 2>/dev/null || true
+            exit 1
+          fi
+        fi
+        if command -v crontab >/dev/null 2>&1; then
+          (crontab -l 2>/dev/null | grep -v 'NAT-WEBUI-AGENT' | grep -v '/opt/natctl/agent/report.sh'; \
+            echo '# BEGIN NAT-WEBUI-AGENT'; \
+            echo {shell_quote(cron_block)}; \
+            echo '# END NAT-WEBUI-AGENT') | crontab -
+        else
+          echo 'WARN: crontab unavailable, run one-shot agent report only'
+        fi
+        {shell_quote(REMOTE_AGENT_SCRIPT)} >/opt/natctl/logs/agent-once.log 2>&1 || true
         echo 'OK: deploy finished'
         """
     )
