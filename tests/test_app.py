@@ -12,7 +12,7 @@ os.environ.setdefault("NAT_WEBUI_DB_PATH", f"/tmp/nat_webui_test_{uuid.uuid4().h
 from app import jobs, main
 from app.chain_deployer import build_front_chain_config
 from app.deployer import build_vless_link, resolve_host_for_ssh
-from app.db import create_node_record, get_node, init_db, list_chain_backend_nodes, list_direct_vless_nodes, list_nodes
+from app.db import create_deployment_record, create_node_record, get_deployment, get_node, init_db, list_chain_backend_nodes, list_direct_vless_nodes, list_nodes, mark_deployment_failed, set_node_generated_fields
 from app.main import app, build_subscription_payload, display_vless_link_for_node
 from app.link_labels import replace_vless_fragment, vless_remark_for_node
 
@@ -60,8 +60,10 @@ def test_nodes_page_after_login() -> None:
     assert response.status_code == 200
     assert "节点列表" in response.text
     assert "新建节点" in response.text
-    assert "复制 v2rayN 订阅 URL" in response.text
-    assert "复制 Clash 订阅 URL" in response.text
+    assert "直连节点" in response.text
+    assert "链式节点" in response.text
+    assert "复制直连 v2rayN 订阅 URL" in response.text
+    assert "复制链式 Clash 订阅 URL" in response.text
 
 
 
@@ -95,6 +97,66 @@ def test_nodes_page_uses_local_svg_flags_with_badge_fallback() -> None:
     assert '.svg' in response.text
     assert 'class="flag-badge"' in response.text
     assert 'force-flag-badge' not in response.text
+
+
+def test_failed_reinstall_preserves_existing_deployed_node_status() -> None:
+    node_id = create_node_record(
+        {
+            "name": "LIVE_NODE_KEEP_STATUS",
+            "ip": "198.51.100.91",
+            "ssh_port": 2291,
+            "ssh_user": "root",
+            "ssh_password": "pass",
+            "public_port": 443,
+            "listen_port": 443,
+        }
+    )
+    node = get_node(node_id)
+    set_node_generated_fields(
+        node_id,
+        selected_reality_target=node["selected_reality_target"] or "www.microsoft.com",
+        generated_uuid=node["generated_uuid"] or "11111111-1111-1111-1111-111111111111",
+        generated_public_key=node["generated_public_key"] or "test-public-key",
+        generated_short_id=node["generated_short_id"] or "abcd1234",
+        last_vless_link="vless://11111111-1111-1111-1111-111111111111@198.51.100.91:443?security=reality&type=tcp#LIVE_NODE_KEEP_STATUS",
+    )
+    deploy_id = create_deployment_record(node_id=node_id, action_type="reinstall")
+    mark_deployment_failed(
+        deploy_id,
+        failure_stage="ssh_probe",
+        summary_log="SSH 连接失败",
+        raw_log="ssh: connect timed out",
+    )
+    node = get_node(node_id)
+    deployment = get_deployment(deploy_id)
+    assert deployment["result"] == "failed"
+    assert node["status"] == "online"
+    assert node["last_vless_link"].startswith("vless://11111111")
+
+
+def test_first_deploy_failure_marks_never_deployed_node_failed() -> None:
+    node_id = create_node_record(
+        {
+            "name": "NEW_NODE_FAIL_STATUS",
+            "ip": "198.51.100.92",
+            "ssh_port": 2292,
+            "ssh_user": "root",
+            "ssh_password": "pass",
+            "public_port": 443,
+            "listen_port": 443,
+        }
+    )
+    deploy_id = create_deployment_record(node_id=node_id, action_type="reinstall")
+    mark_deployment_failed(
+        deploy_id,
+        failure_stage="deploy",
+        summary_log="部署失败",
+        raw_log="ERROR",
+    )
+    node = get_node(node_id)
+    deployment = get_deployment(deploy_id)
+    assert deployment["result"] == "failed"
+    assert node["status"] == "deploy_failed"
 
 def test_create_reinstall_and_delete_node_flow(monkeypatch) -> None:
     login()
@@ -510,6 +572,91 @@ def test_renamed_node_updates_export_and_subscription_link_name() -> None:
     assert "OLD_LINK_NAME" not in decoded
 
 
+
+def test_scoped_subscription_feeds_split_direct_and_chain_nodes() -> None:
+    import base64
+
+    direct_id = create_node_record(
+        {
+            "name": "DIRECT_SUB_NODE",
+            "ip": "198.51.100.71",
+            "ssh_port": 2271,
+            "ssh_user": "root",
+            "ssh_password": "pass",
+            "public_port": 443,
+            "listen_port": 443,
+        }
+    )
+    chain_id = create_node_record(
+        {
+            "name": "CHAIN_SUB_NODE",
+            "ip": "198.51.100.72",
+            "ssh_port": 2272,
+            "ssh_user": "root",
+            "ssh_password": "pass",
+            "protocol_type": "vless_chain",
+            "public_port": 443,
+            "listen_port": 443,
+        }
+    )
+    from app.db import get_conn
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE nodes SET last_vless_link = ?, generated_uuid = ?, generated_public_key = ?, generated_short_id = ? WHERE node_id = ?",
+            (
+                "vless://22222222-2222-2222-2222-222222222222@198.51.100.71:443?security=reality&sni=www.microsoft.com&pbk=directpub&sid=abcd&type=tcp&flow=xtls-rprx-vision#DIRECT_SUB_NODE",
+                "22222222-2222-2222-2222-222222222222",
+                "directpub",
+                "abcd",
+                direct_id,
+            ),
+        )
+        conn.execute(
+            "UPDATE nodes SET last_vless_link = ?, generated_uuid = ?, generated_public_key = ?, generated_short_id = ? WHERE node_id = ?",
+            (
+                "vless://33333333-3333-3333-3333-333333333333@198.51.100.72:443?security=reality&sni=www.microsoft.com&pbk=chainpub&sid=efgh&type=tcp&flow=xtls-rprx-vision#CHAIN_SUB_NODE",
+                "33333333-3333-3333-3333-333333333333",
+                "chainpub",
+                "efgh",
+                chain_id,
+            ),
+        )
+
+    login()
+    page = client.get("/nodes")
+    assert page.status_code == 200
+    assert "scope=direct" in page.text
+    assert "scope=chain" in page.text
+    token = page.text.split("/sub/")[1].split('?')[0]
+
+    direct_feed = client.get(f"/sub/{token}?scope=direct")
+    assert direct_feed.status_code == 200
+    direct_decoded = base64.b64decode(direct_feed.text).decode("utf-8")
+    assert "22222222-2222-2222-2222-222222222222" in direct_decoded
+    assert "33333333-3333-3333-3333-333333333333" not in direct_decoded
+
+    chain_feed = client.get(f"/sub/{token}?scope=chain")
+    assert chain_feed.status_code == 200
+    chain_decoded = base64.b64decode(chain_feed.text).decode("utf-8")
+    assert "33333333-3333-3333-3333-333333333333" in chain_decoded
+    assert "22222222-2222-2222-2222-222222222222" not in chain_decoded
+
+    all_feed = client.get(f"/sub/{token}")
+    assert all_feed.status_code == 200
+    all_decoded = base64.b64decode(all_feed.text).decode("utf-8")
+    assert "22222222-2222-2222-2222-222222222222" in all_decoded
+    assert "33333333-3333-3333-3333-333333333333" in all_decoded
+
+    direct_clash = client.get(f"/sub/{token}/clash?scope=direct")
+    assert direct_clash.status_code == 200
+    assert "DIRECT_SUB_NODE" in direct_clash.text
+    assert "CHAIN_SUB_NODE" not in direct_clash.text
+
+    chain_clash = client.get(f"/sub/{token}/clash?scope=chain")
+    assert chain_clash.status_code == 200
+    assert "CHAIN_SUB_NODE" in chain_clash.text
+    assert "DIRECT_SUB_NODE" not in chain_clash.text
+
 def test_edit_chain_node_name_redirects_to_detail_and_updates() -> None:
     login()
     front_id = create_node_record(
@@ -661,15 +808,64 @@ def test_chain_form_excludes_tunnel_as_backend() -> None:
     assert front_id in backend_ids
     assert tunnel_id not in backend_ids
 
+    imported_id = create_node_record(
+        {
+            "name": "IMPORTED_BACKEND_FORM",
+            "protocol_type": "imported_vless",
+            "ip": "203.0.113.88",
+            "ssh_port": 22,
+            "ssh_user": "imported",
+            "ssh_password": "",
+            "public_port": 443,
+            "listen_port": 443,
+            "last_vless_link": "vless://33333333-3333-3333-3333-333333333333@203.0.113.88:443?security=reality&type=tcp&sni=www.microsoft.com&fp=chrome&pbk=pub-key&sid=short-id&flow=xtls-rprx-vision#IMPORTED_BACKEND_FORM",
+        }
+    )
+    direct_ids = {row["node_id"] for row in list_direct_vless_nodes()}
+    backend_ids = {row["node_id"] for row in list_chain_backend_nodes()}
+    assert imported_id not in direct_ids
+    assert imported_id in backend_ids
+
     response = client.get("/nodes/new-chain")
     assert response.status_code == 200
     html = response.text
     front_block = html.split('name="front_node_id"', 1)[1].split('name="backend_node_id"', 1)[0]
     backend_block = html.split('name="backend_node_id"', 1)[1].split('name="chain_mode"', 1)[0]
     assert "FRONT_FORM_REALITY · Reality · 198.51.100.71:443" in front_block
+    assert "IMPORTED_BACKEND_FORM" not in front_block
     assert "BACKEND_FORM_TUNNEL" not in front_block
     assert "FRONT_FORM_REALITY · Reality · 198.51.100.71:443" in backend_block
+    assert "IMPORTED_BACKEND_FORM" in backend_block
     assert "BACKEND_FORM_TUNNEL · tunnel · backend-tunnel.example.com:443" not in backend_block
+
+
+def test_build_front_chain_config_uses_imported_reality_backend() -> None:
+    config = {
+        "inbounds": [
+            {"type": "vless", "tag": "in-1", "tls": {"reality": {"enabled": True}}, "users": []}
+        ],
+        "outbounds": [],
+        "route": {"rules": []},
+    }
+    backend = {
+        "protocol_type": "imported_vless",
+        "last_vless_link": "vless://55555555-5555-5555-5555-555555555555@203.0.113.55:2443?security=reality&type=tcp&sni=www.cloudflare.com&fp=firefox&pbk=import-pub&sid=import-sid&flow=xtls-rprx-vision#Imported",
+        "public_port": 2443,
+    }
+
+    updated = build_front_chain_config(config, chain_tag="chain-import", chain_uuid="chain-uuid", backend=backend)
+    out = next(item for item in updated["outbounds"] if item["tag"] == "chain-import-out")
+    assert out["server"] == "203.0.113.55"
+    assert out["server_port"] == 2443
+    assert out["uuid"] == "55555555-5555-5555-5555-555555555555"
+    assert out["flow"] == "xtls-rprx-vision"
+    assert out["tls"]["server_name"] == "www.cloudflare.com"
+    assert out["tls"]["utls"]["fingerprint"] == "firefox"
+    assert out["tls"]["reality"]["public_key"] == "import-pub"
+    assert out["tls"]["reality"]["short_id"] == "import-sid"
+    rule = updated["route"]["rules"][0]
+    assert rule["user"] == ["chain-import"]
+    assert "auth_user" not in rule
 
 def test_phase2_markdown_exists() -> None:
     with open("PHASE2.md", "r", encoding="utf-8") as f:

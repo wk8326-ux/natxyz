@@ -4,7 +4,7 @@ import secrets
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -198,7 +198,7 @@ def list_chain_backend_nodes() -> list[sqlite3.Row]:
         return conn.execute(
             """
             SELECT * FROM nodes
-            WHERE protocol_type = 'vless_reality_singbox'
+            WHERE protocol_type IN ('vless_reality_singbox', 'imported_vless')
               AND TRIM(COALESCE(ip, '')) != ''
               AND COALESCE(public_port, 0) > 0
               AND TRIM(COALESCE(last_vless_link, '')) != ''
@@ -207,15 +207,20 @@ def list_chain_backend_nodes() -> list[sqlite3.Row]:
         ).fetchall()
 
 
-def list_subscribable_nodes() -> list[sqlite3.Row]:
+def list_subscribable_nodes(protocol_type: str | Sequence[str] | None = None) -> list[sqlite3.Row]:
+    query = """
+        SELECT * FROM nodes
+        WHERE TRIM(COALESCE(last_vless_link, '')) != ''
+    """
+    params: list[Any] = []
+    if protocol_type:
+        protocol_types = [protocol_type] if isinstance(protocol_type, str) else list(protocol_type)
+        placeholders = ",".join("?" for _ in protocol_types)
+        query += f" AND protocol_type IN ({placeholders})"
+        params.extend(protocol_types)
+    query += " ORDER BY updated_at DESC, created_at DESC"
     with get_conn() as conn:
-        return conn.execute(
-            """
-            SELECT * FROM nodes
-            WHERE TRIM(COALESCE(last_vless_link, '')) != ''
-            ORDER BY updated_at DESC, created_at DESC
-            """
-        ).fetchall()
+        return conn.execute(query, tuple(params)).fetchall()
 
 
 
@@ -280,15 +285,117 @@ def get_or_create_subscription_token() -> str:
 
 
 
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _get_setting(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute(
+        "SELECT setting_value FROM app_settings WHERE setting_key = ?",
+        (key,),
+    ).fetchone()
+    if not row:
+        return None
+    return str(row["setting_value"] or "") or None
+
+
+def _set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings (setting_key, setting_value, updated_at) VALUES (?, ?, ?)",
+        (key, value, now_iso()),
+    )
+
+
 def validate_subscription_token(token: str) -> bool:
+    token = str(token or "")
+    if not token:
+        return False
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT setting_value FROM app_settings WHERE setting_key = ?",
-            ("subscription_token",),
-        ).fetchone()
-        if not row:
+        current_token = _get_setting(conn, "subscription_token")
+        if current_token and secrets.compare_digest(token, current_token):
+            return True
+        previous_token = _get_setting(conn, "subscription_previous_token")
+        previous_expires_at = _parse_iso_datetime(_get_setting(conn, "subscription_previous_expires_at"))
+        if not previous_token or not previous_expires_at:
             return False
-        return secrets.compare_digest(token, row["setting_value"])
+        if previous_expires_at <= datetime.now(timezone.utc):
+            return False
+        return secrets.compare_digest(token, previous_token)
+
+
+def rotate_subscription_token() -> dict[str, str]:
+    with get_conn() as conn:
+        current_token = _get_setting(conn, "subscription_token")
+        if not current_token:
+            current_token = build_subscription_token()
+            _set_setting(conn, "subscription_token", current_token)
+        new_token = build_subscription_token()
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+        _set_setting(conn, "subscription_previous_token", current_token)
+        _set_setting(conn, "subscription_previous_expires_at", expires_at)
+        _set_setting(conn, "subscription_token", new_token)
+        return {
+            "subscription_token": new_token,
+            "previous_token": current_token,
+            "previous_expires_at": expires_at,
+        }
+
+
+def get_subscription_token_state() -> dict[str, str | None]:
+    with get_conn() as conn:
+        current_token = _get_setting(conn, "subscription_token")
+        if not current_token:
+            current_token = build_subscription_token()
+            _set_setting(conn, "subscription_token", current_token)
+        previous_token = _get_setting(conn, "subscription_previous_token")
+        previous_expires_at = _get_setting(conn, "subscription_previous_expires_at")
+        expires_dt = _parse_iso_datetime(previous_expires_at)
+        if expires_dt and expires_dt <= datetime.now(timezone.utc):
+            previous_token = None
+            previous_expires_at = None
+        return {
+            "subscription_token": current_token,
+            "previous_token": previous_token,
+            "previous_expires_at": previous_expires_at,
+        }
+
+
+def redact_sensitive_text(text: str | None) -> str:
+    value = str(text or "")
+    if not value:
+        return ""
+    replacements: set[str] = set()
+    with get_conn() as conn:
+        for row in conn.execute(
+            """
+            SELECT ssh_password, cf_tunnel_token, generated_private_key,
+                   generated_uuid, last_vless_link
+            FROM nodes
+            """
+        ).fetchall():
+            for key in ["ssh_password", "cf_tunnel_token", "generated_private_key", "generated_uuid", "last_vless_link"]:
+                item = str(row[key] or "").strip()
+                if len(item) >= 6:
+                    replacements.add(item)
+        for key in ["subscription_token", "subscription_previous_token"]:
+            item = _get_setting(conn, key)
+            if item and len(item) >= 6:
+                replacements.add(item)
+    for item in sorted(replacements, key=len, reverse=True):
+        value = value.replace(item, "[REDACTED]")
+    import re
+    value = re.sub(r"vless://[^\s'\"<>]+", "vless://[REDACTED]", value)
+    value = re.sub(r"(eyJ[A-Za-z0-9_\-.]{20,})", "[REDACTED_TOKEN]", value)
+    value = re.sub(r"-----BEGIN [^-]+ PRIVATE KEY-----.*?-----END [^-]+ PRIVATE KEY-----", "[REDACTED_PRIVATE_KEY]", value, flags=re.S)
+    value = re.sub(r"((?:password|passwd|pwd|token|private[_-]?key|uuid)\s*[=:]\s*)\S+", r"\1[REDACTED]", value, flags=re.I)
+    value = re.sub(r"(sshpass\s+-p\s+)(?:'[^']*'|\"[^\"]*\"|\S+)", r"\1[REDACTED]", value, flags=re.I)
+    value = re.sub(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b", "[REDACTED_UUID]", value)
+    return value
 
 
 
@@ -696,7 +803,7 @@ def mark_deployment_success(
                 summary_log = ?, raw_log = ?, generated_vless_link = ?
             WHERE deploy_id = ?
             """,
-            (ts, "success", None, summary_log, raw_log, generated_vless_link, deploy_id),
+            (ts, "success", None, redact_sensitive_text(summary_log), redact_sensitive_text(raw_log), redact_sensitive_text(generated_vless_link), deploy_id),
         )
         conn.execute(
             """
@@ -723,6 +830,10 @@ def mark_deployment_failed(
         ).fetchone()
         if not deployment:
             return
+        node = conn.execute(
+            "SELECT status, last_vless_link, last_seen_at FROM nodes WHERE node_id = ?",
+            (deployment["node_id"],),
+        ).fetchone()
         ts = now_iso()
         conn.execute(
             """
@@ -730,11 +841,22 @@ def mark_deployment_failed(
             SET ended_at = ?, result = ?, failure_stage = ?, summary_log = ?, raw_log = ?
             WHERE deploy_id = ?
             """,
-            (ts, "failed", failure_stage, summary_log, raw_log, deploy_id),
+            (ts, "failed", failure_stage, redact_sensitive_text(summary_log), redact_sensitive_text(raw_log), deploy_id),
         )
+        current_status = node["status"] if node else ""
+        has_existing_link = bool(node and str(node["last_vless_link"] or "").strip())
+        has_recent_report = bool(node and str(node["last_seen_at"] or "").strip())
+        if current_status == "online":
+            next_status = "online"
+        elif has_existing_link or has_recent_report:
+            next_status = "online"
+        elif current_status == "offline":
+            next_status = "offline"
+        else:
+            next_status = "deploy_failed"
         conn.execute(
             "UPDATE nodes SET status = ?, updated_at = ? WHERE node_id = ?",
-            ("deploy_failed", ts, deployment["node_id"]),
+            (next_status, ts, deployment["node_id"]),
         )
 
 
@@ -759,6 +881,7 @@ def update_node_generated_fields(
                 generated_public_key = ?,
                 generated_short_id = ?,
                 last_vless_link = ?,
+                status = ?,
                 updated_at = ?
             WHERE node_id = ?
             """,
@@ -769,11 +892,33 @@ def update_node_generated_fields(
                 generated_public_key,
                 generated_short_id,
                 last_vless_link,
+                "online",
                 now_iso(),
                 node_id,
             ),
         )
 
+
+
+def set_node_generated_fields(
+    node_id: str,
+    *,
+    selected_reality_target: str,
+    generated_uuid: str,
+    generated_public_key: str,
+    generated_short_id: str,
+    last_vless_link: str,
+    generated_private_key: str = "",
+) -> None:
+    update_node_generated_fields(
+        node_id,
+        selected_reality_target=selected_reality_target,
+        generated_uuid=generated_uuid,
+        generated_private_key=generated_private_key,
+        generated_public_key=generated_public_key,
+        generated_short_id=generated_short_id,
+        last_vless_link=last_vless_link,
+    )
 
 
 def mark_node_deployed_from_report(node_id: str, payload: dict[str, Any]) -> None:

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ title }} - NAT WebUI</title>
-  <link rel="stylesheet" href="/static/style.css?v=202606010030">
+  <link rel="stylesheet" href="/static/style.css?v=202606080820">
 </head>
 <body>
   <div class="shell">
@@ -14,9 +14,13 @@
         <h1>{{ title }}</h1>
       </div>
       {% if request.session.get('auth') %}
-      <form method="post" action="/logout">
-        <button class="ghost-btn" type="submit">退出</button>
-      </form>
+      <div class="topbar-actions">
+        {% block topbar_actions %}{% endblock %}
+        <button class="icon-btn theme-toggle" type="button" id="themeToggle" title="切换白天/黑夜模式" aria-label="切换白天/黑夜模式">☾</button>
+        <form method="post" action="/logout">
+          <button class="ghost-btn" type="submit">退出</button>
+        </form>
+      </div>
       {% endif %}
     </header>
     <main>
@@ -24,6 +28,23 @@
     </main>
   </div>
   <script>
+    (function initTheme() {
+      const saved = localStorage.getItem('nat-webui-theme') || 'dark';
+      document.documentElement.dataset.theme = saved;
+      window.addEventListener('DOMContentLoaded', () => {
+        const toggle = document.getElementById('themeToggle');
+        if (!toggle) return;
+        const sync = () => { toggle.textContent = document.documentElement.dataset.theme === 'light' ? '☀' : '☾'; };
+        sync();
+        toggle.addEventListener('click', () => {
+          const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+          document.documentElement.dataset.theme = next;
+          localStorage.setItem('nat-webui-theme', next);
+          sync();
+        });
+      });
+    })();
+
     function restoreButtonContent(button, html, ms) {
       if (!button) return;
       setTimeout(() => {

@@ -4,6 +4,7 @@ import shlex
 import subprocess
 import tempfile
 import time
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -113,6 +114,54 @@ def _build_reality_backend_outbound(backend: dict[str, Any], outbound_tag: str) 
     }
 
 
+def _parse_vless_query(link: str) -> tuple[urllib.parse.ParseResult, dict[str, str]]:
+    try:
+        parsed = urllib.parse.urlparse(str(link or "").strip())
+    except ValueError as exc:
+        raise RemoteApplyError(f"imported VLESS link parse failed: {exc}") from exc
+    if parsed.scheme != "vless" or not parsed.username or not parsed.hostname:
+        raise RemoteApplyError("imported VLESS link is incomplete")
+    query = {k: v[-1] for k, v in urllib.parse.parse_qs(parsed.query, keep_blank_values=True).items()}
+    return parsed, query
+
+
+def _build_imported_vless_outbound(backend: dict[str, Any], outbound_tag: str) -> dict[str, Any]:
+    parsed, query = _parse_vless_query(str(_require_value(backend, "last_vless_link", "imported VLESS link")))
+    security = (query.get("security") or "").lower()
+    transport_type = (query.get("type") or "tcp").lower()
+    if security != "reality":
+        raise RemoteApplyError("imported VLESS backend must be Reality; non-Reality imported nodes cannot be used as chain backend")
+    if transport_type and transport_type != "tcp":
+        raise RemoteApplyError("imported VLESS backend must use tcp transport for chain backend")
+    public_key = query.get("pbk") or query.get("publicKey") or query.get("public_key")
+    if not public_key:
+        raise RemoteApplyError("imported VLESS backend missing Reality public key: pbk")
+    server_name = query.get("sni") or query.get("serverName") or "www.microsoft.com"
+    outbound: dict[str, Any] = {
+        "type": "vless",
+        "tag": outbound_tag,
+        "server": parsed.hostname,
+        "server_port": int(parsed.port or backend.get("public_port") or 443),
+        "uuid": urllib.parse.unquote(parsed.username),
+        "tls": {
+            "enabled": True,
+            "server_name": server_name,
+            "utls": {"enabled": True, "fingerprint": query.get("fp") or query.get("fingerprint") or "chrome"},
+            "reality": {
+                "enabled": True,
+                "public_key": public_key,
+            },
+        },
+    }
+    flow = query.get("flow")
+    if flow:
+        outbound["flow"] = flow
+    short_id = query.get("sid") or query.get("shortId") or query.get("short_id")
+    if short_id:
+        outbound["tls"]["reality"]["short_id"] = short_id
+    return outbound
+
+
 def _build_tunnel_backend_outbound(backend: dict[str, Any], outbound_tag: str) -> dict[str, Any]:
     cf_host = str(_require_value(backend, "cf_host", "tunnel host")).strip()
     ws_path = str(backend.get("ws_path") or "/").strip() or "/"
@@ -141,6 +190,8 @@ def _build_backend_outbound(backend: dict[str, Any], outbound_tag: str) -> dict[
         raise RemoteApplyError("tunnel backend is disabled for chain proxy; use tunnel only as a single node")
     if protocol == "vless_reality_singbox":
         return _build_reality_backend_outbound(backend, outbound_tag)
+    if protocol == "imported_vless":
+        return _build_imported_vless_outbound(backend, outbound_tag)
     raise RemoteApplyError(f"unsupported chain backend protocol: {protocol}")
 
 
@@ -160,7 +211,7 @@ def build_front_chain_config(config: dict[str, Any], *, chain_tag: str, chain_uu
     rules = route.setdefault("rules", [])
     rules[:] = [r for r in rules if r.get("outbound") != outbound_tag and r.get("action") != outbound_tag]
     inbound_tag = inbound.get("tag")
-    rule: dict[str, Any] = {"auth_user": [chain_tag], "outbound": outbound_tag}
+    rule: dict[str, Any] = {"user": [chain_tag], "outbound": outbound_tag}
     if inbound_tag:
         rule["inbound"] = [inbound_tag]
     rules.insert(0, rule)

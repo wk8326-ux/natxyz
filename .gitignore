@@ -8,7 +8,10 @@ __pycache__/
 
 # Runtime data
 data/*.db
+data/*.pid
 logs/*.log
+logs/*.out
+logs/*.err
 
 # OS / editor
 .DS_Store
