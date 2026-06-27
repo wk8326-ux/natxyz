@@ -787,6 +787,9 @@ def test_single_node_remote_script_cleans_stale_managed_port() -> None:
         singbox_archive_name="sing-box.tar.gz",
     )
 
+    assert "mkdir -p" in script
+    assert "/etc/systemd/system" in script
+    assert "command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]" in script
     assert "systemctl stop sing-box" in script
     assert "rc-service sing-box stop" in script
     assert "stale NAT WebUI sing-box process" in script

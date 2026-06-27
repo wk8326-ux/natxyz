@@ -370,7 +370,7 @@ def build_remote_script(node: dict, *, singbox_config: str, node_meta: str, agen
     return textwrap.dedent(
         f"""\
         set -eu
-        mkdir -p {shell_quote(REMOTE_BIN_DIR)} {shell_quote(REMOTE_AGENT_DIR)} {shell_quote(REMOTE_STATE_DIR)} {shell_quote(REMOTE_LOG_DIR)} {shell_quote(REMOTE_SINGBOX_DIR)} /tmp/natctl-singbox
+        mkdir -p {shell_quote(REMOTE_BIN_DIR)} {shell_quote(REMOTE_AGENT_DIR)} {shell_quote(REMOTE_STATE_DIR)} {shell_quote(REMOTE_LOG_DIR)} {shell_quote(REMOTE_SINGBOX_DIR)} /tmp/natctl-singbox /etc/systemd/system
         if command -v apk >/dev/null 2>&1; then
           apk add --no-cache curl ca-certificates tar gzip python3 coreutils iproute2 >/dev/null
         elif command -v apt-get >/dev/null 2>&1; then
@@ -407,7 +407,7 @@ Path('/etc/init.d/sing-box').write_text({openrc_script!r})
 Path('/etc/systemd/system/sing-box.service').write_text({systemd_script!r})
 PYEOF
         chmod +x {shell_quote(REMOTE_AGENT_SCRIPT)} /etc/init.d/sing-box
-        if command -v systemctl >/dev/null 2>&1; then
+        if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
           systemctl stop sing-box >/dev/null 2>&1 || true
         fi
         if command -v rc-service >/dev/null 2>&1; then
@@ -445,7 +445,7 @@ PYEOF
           cat /opt/natctl/logs/sing-box-check.log
           exit 1
         fi
-        if command -v systemctl >/dev/null 2>&1; then
+        if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
           systemctl daemon-reload >/dev/null 2>&1 || true
           systemctl enable sing-box >/dev/null 2>&1 || true
           systemctl restart sing-box >/dev/null 2>&1

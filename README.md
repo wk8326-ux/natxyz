@@ -287,6 +287,8 @@ Clash：
 - 再检查 `listen_port` 是否仍被占用
 - 若占用者是本项目残留的 `/usr/local/bin/sing-box run -c /etc/sing-box/config.json`，允许清理后继续
 - 若占用者不是本项目 `sing-box`，必须报错并输出占用进程，不要误杀其他服务
+- 判断 `systemctl` 时必须同时确认 `/run/systemd/system` 存在；部分 Alpine/LXC 环境可能残留 `systemctl` 命令但实际不是 systemd，不能误走 systemd 分支
+- 写 systemd unit 前先创建 `/etc/systemd/system`，避免纯 Alpine 环境目录不存在导致部署脚本提前失败
 - 启动后必须再次验证目标端口已监听
 
 ### 改节点状态逻辑
