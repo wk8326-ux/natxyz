@@ -198,7 +198,7 @@ def list_chain_backend_nodes() -> list[sqlite3.Row]:
         return conn.execute(
             """
             SELECT * FROM nodes
-            WHERE protocol_type = 'vless_reality_singbox'
+            WHERE protocol_type IN ('vless_reality_singbox', 'imported_vless')
               AND TRIM(COALESCE(ip, '')) != ''
               AND COALESCE(public_port, 0) > 0
               AND TRIM(COALESCE(last_vless_link, '')) != ''
@@ -698,7 +698,7 @@ def create_demo_node() -> None:
                 None,
                 443,
                 443,
-                "www.microsoft.com",
+                "www.cloudflare.com",
                 "11111111-1111-1111-1111-111111111111",
                 "demo-private-key",
                 "demo-public-key",
@@ -846,9 +846,11 @@ def mark_deployment_failed(
         current_status = node["status"] if node else ""
         has_existing_link = bool(node and str(node["last_vless_link"] or "").strip())
         has_recent_report = bool(node and str(node["last_seen_at"] or "").strip())
-        if current_status in {"online", "offline"}:
-            next_status = current_status or "offline"
+        if current_status == "online":
+            next_status = "online"
         elif has_existing_link or has_recent_report:
+            next_status = "online"
+        elif current_status == "offline":
             next_status = "offline"
         else:
             next_status = "deploy_failed"
@@ -879,6 +881,7 @@ def update_node_generated_fields(
                 generated_public_key = ?,
                 generated_short_id = ?,
                 last_vless_link = ?,
+                status = ?,
                 updated_at = ?
             WHERE node_id = ?
             """,
@@ -889,11 +892,33 @@ def update_node_generated_fields(
                 generated_public_key,
                 generated_short_id,
                 last_vless_link,
+                "online",
                 now_iso(),
                 node_id,
             ),
         )
 
+
+
+def set_node_generated_fields(
+    node_id: str,
+    *,
+    selected_reality_target: str,
+    generated_uuid: str,
+    generated_public_key: str,
+    generated_short_id: str,
+    last_vless_link: str,
+    generated_private_key: str = "",
+) -> None:
+    update_node_generated_fields(
+        node_id,
+        selected_reality_target=selected_reality_target,
+        generated_uuid=generated_uuid,
+        generated_private_key=generated_private_key,
+        generated_public_key=generated_public_key,
+        generated_short_id=generated_short_id,
+        last_vless_link=last_vless_link,
+    )
 
 
 def mark_node_deployed_from_report(node_id: str, payload: dict[str, Any]) -> None:
@@ -920,7 +945,7 @@ def mark_node_deployed_from_report(node_id: str, payload: dict[str, Any]) -> Non
         node_name = node["name"] or node_id
         last_vless_link = node["last_vless_link"] or ""
         if not selected_reality_target:
-            selected_reality_target = "www.microsoft.com"
+            selected_reality_target = "www.cloudflare.com"
         if not last_vless_link:
             last_vless_link = (
                 f"vless://{generated_uuid}@{public_ip}:{public_port}"

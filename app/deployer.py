@@ -135,7 +135,7 @@ def shell_quote(value: str) -> str:
 
 
 def choose_reality_target() -> str:
-    return "www.microsoft.com"
+    return "www.cloudflare.com"
 
 
 
@@ -407,6 +407,39 @@ Path('/etc/init.d/sing-box').write_text({openrc_script!r})
 Path('/etc/systemd/system/sing-box.service').write_text({systemd_script!r})
 PYEOF
         chmod +x {shell_quote(REMOTE_AGENT_SCRIPT)} /etc/init.d/sing-box
+        if command -v systemctl >/dev/null 2>&1; then
+          systemctl stop sing-box >/dev/null 2>&1 || true
+        fi
+        if command -v rc-service >/dev/null 2>&1; then
+          rc-service sing-box stop >/dev/null 2>&1 || true
+        fi
+        sleep 1
+        if command -v ss >/dev/null 2>&1; then
+          port_pids=$(ss -ltnp 2>/dev/null | awk '$4 ~ /:{int(node["listen_port"])}$/ {{print $0}}' | sed -En 's/.*pid=([0-9][0-9]*).*/\\1/p' | sort -u)
+          for pid in $port_pids; do
+            cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+            case "$cmdline" in
+              *'/usr/local/bin/sing-box run -c /etc/sing-box/config.json'*|*'sing-box run -c /etc/sing-box/config.json'*)
+                echo "INFO: stopping stale NAT WebUI sing-box process $pid on port {int(node["listen_port"])}"
+                kill "$pid" 2>/dev/null || true
+                ;;
+              *)
+                echo "ERROR: port {int(node["listen_port"])} is occupied by non-NAT-WebUI process: $pid $cmdline"
+                ss -ltnp 2>/dev/null | awk '$4 ~ /:{int(node["listen_port"])}$/ {{print $0}}' || true
+                exit 1
+                ;;
+            esac
+          done
+          sleep 1
+          if ss -ltnp 2>/dev/null | awk '$4 ~ /:{int(node["listen_port"])}$/ {{print $0}}' | grep -q .; then
+            echo 'ERROR: sing-box listen port is still occupied after cleanup'
+            ss -ltnp 2>/dev/null | awk '$4 ~ /:{int(node["listen_port"])}$/ {{print $0}}' || true
+            exit 1
+          fi
+        else
+          pkill -f 'sing-box run -c /etc/sing-box/config.json' 2>/dev/null || true
+          sleep 1
+        fi
         if ! /usr/local/bin/sing-box check -c /etc/sing-box/config.json >/opt/natctl/logs/sing-box-check.log 2>&1; then
           echo 'ERROR: sing-box config check failed'
           cat /opt/natctl/logs/sing-box-check.log

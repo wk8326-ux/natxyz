@@ -143,6 +143,7 @@ CHAIN_MODE = "vless_reality_to_vless_reality"
 PROTOCOL_DIRECT = "vless_reality_singbox"
 PROTOCOL_CHAIN = "vless_chain"
 PROTOCOL_TUNNEL = "cf_vless_ws"
+PROTOCOL_IMPORT = "imported_vless"
 
 
 def is_chain_protocol(protocol_type: object) -> bool:
@@ -153,8 +154,17 @@ def is_tunnel_protocol(protocol_type: object) -> bool:
     return str(protocol_type or "") == PROTOCOL_TUNNEL
 
 
+def is_import_protocol(protocol_type: object) -> bool:
+    return str(protocol_type or "") == PROTOCOL_IMPORT
+
+
+
 def is_direct_vless_protocol(protocol_type: object) -> bool:
     return str(protocol_type or "") in {"", PROTOCOL_DIRECT}
+
+
+def is_chain_backend_protocol(protocol_type: object) -> bool:
+    return str(protocol_type or "") in {PROTOCOL_DIRECT, PROTOCOL_IMPORT}
 
 
 
@@ -177,6 +187,7 @@ def node_to_form_values(node) -> dict[str, object]:
         "cf_tunnel_token": node["cf_tunnel_token"] or "",
         "ws_port": node["ws_port"] or 8080,
         "ws_path": node["ws_path"] or "/",
+        "last_vless_link": node["last_vless_link"] or "",
     }
 
 
@@ -200,6 +211,7 @@ def default_form_values() -> dict[str, object]:
         "cf_tunnel_token": "",
         "ws_port": 8080,
         "ws_path": "/",
+        "last_vless_link": "",
     }
 
 
@@ -234,6 +246,46 @@ def is_valid_ip_or_hostname(value: str) -> bool:
 
 
 
+def parse_imported_vless_link(link: str) -> tuple[dict[str, object], list[str]]:
+    errors: list[str] = []
+    raw = str(link or "").strip()
+    if not raw:
+        return {}, ["VLESS 链接不能为空"]
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except ValueError as exc:
+        return {}, [f"VLESS 链接解析失败：{exc}"]
+    if parsed.scheme != "vless" or not parsed.username or not parsed.hostname:
+        return {}, ["请粘贴完整 vless:// 链接"]
+    host = normalize_host_value(parsed.hostname)
+    if not is_valid_ip_or_hostname(host):
+        errors.append("VLESS 链接里的地址不是有效 IP 或域名")
+    port = parsed.port or 443
+    if port <= 0 or port > 65535:
+        errors.append("VLESS 链接端口必须在 1-65535 之间")
+    remark = urllib.parse.unquote(parsed.fragment or "").strip()
+    return {"host": host, "port": port, "remark": remark, "link": raw}, errors
+
+
+
+def apply_imported_vless_defaults(cleaned: dict[str, object], link_info: dict[str, object]) -> None:
+    cleaned["ip"] = str(link_info.get("host") or "")
+    cleaned["ssh_port"] = 22
+    cleaned["ssh_user"] = "imported"
+    cleaned["ssh_password"] = ""
+    cleaned["public_port"] = int(link_info.get("port") or 443)
+    cleaned["listen_port"] = int(link_info.get("port") or 443)
+    cleaned["front_node_id"] = None
+    cleaned["backend_node_id"] = None
+    cleaned["chain_mode"] = None
+    cleaned["cf_host"] = None
+    cleaned["cf_tunnel_token"] = None
+    cleaned["ws_port"] = 8080
+    cleaned["ws_path"] = "/"
+    cleaned["last_vless_link"] = str(link_info.get("link") or "")
+
+
+
 def apply_chain_endpoint_defaults(cleaned: dict[str, object], front_node) -> None:
     cleaned["ip"] = front_node["ip"]
     cleaned["ssh_port"] = front_node["ssh_port"]
@@ -249,8 +301,27 @@ def apply_chain_endpoint_defaults(cleaned: dict[str, object], front_node) -> Non
 def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None) -> tuple[dict[str, object], list[str]]:
     errors: list[str] = []
     cleaned: dict[str, object] = {}
+    if str(form.get("_import_edit_locked") or "") == "1":
+        existing = get_node(editing_node_id) if editing_node_id else None
+        if not existing or not is_import_protocol(existing["protocol_type"]):
+            errors.append("仅导入节点不存在")
+        else:
+            original = dict(existing)
+            cleaned.update(original)
+            cleaned["name"] = str(form.get("name") or original.get("name") or "").strip()[:80]
+            manual_country_code = str(form.get("manual_country_code") or "").strip().upper()
+            manual_region_label = str(form.get("manual_region_label") or "").strip()
+            if manual_country_code and (len(manual_country_code) != 2 or not manual_country_code.isalpha()):
+                errors.append("国家/地区代码请填写两位字母，例如 JP / HK / US")
+            cleaned["manual_country_code"] = manual_country_code or None
+            cleaned["manual_region_label"] = manual_region_label or None
+            cleaned["protocol_type"] = PROTOCOL_IMPORT
+            if not cleaned["name"]:
+                errors.append("name 不能为空")
+        return cleaned, errors
+
     protocol_type = str(form.get("protocol_type") or PROTOCOL_DIRECT).strip() or PROTOCOL_DIRECT
-    if protocol_type not in {PROTOCOL_DIRECT, PROTOCOL_CHAIN, PROTOCOL_TUNNEL}:
+    if protocol_type not in {PROTOCOL_DIRECT, PROTOCOL_CHAIN, PROTOCOL_TUNNEL, PROTOCOL_IMPORT}:
         errors.append("protocol_type 不支持")
         protocol_type = PROTOCOL_DIRECT
     cleaned["protocol_type"] = protocol_type
@@ -262,6 +333,10 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
                 required_fields.remove(optional_key)
     if is_tunnel_protocol(protocol_type):
         for optional_key in ["public_port", "listen_port"]:
+            if optional_key in required_fields:
+                required_fields.remove(optional_key)
+    if is_import_protocol(protocol_type):
+        for optional_key in ["ip", "ssh_port", "ssh_user", "ssh_password", "public_port", "listen_port"]:
             if optional_key in required_fields:
                 required_fields.remove(optional_key)
 
@@ -323,8 +398,8 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
             errors.append("后端节点不存在")
         if front_node and front_node["protocol_type"] != PROTOCOL_DIRECT:
             errors.append("前置节点必须是 VLESS + Reality 直连节点")
-        if backend_node and backend_node["protocol_type"] != PROTOCOL_DIRECT:
-            errors.append("后端节点必须是 VLESS + Reality 直连节点；tunnel 仅作为单节点使用，不再作为链式落地端")
+        if backend_node and not is_chain_backend_protocol(backend_node["protocol_type"]):
+            errors.append("后端节点必须是直连或仅导入 VLESS 节点；tunnel 仅作为单节点使用，不再作为链式落地端")
         if front_node and editing_node_id and front_node["node_id"] == editing_node_id:
             errors.append("链式节点不能选择自己作为前置节点")
         if backend_node and editing_node_id and backend_node["node_id"] == editing_node_id:
@@ -341,6 +416,13 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
         cleaned["chain_mode"] = None
         cleaned["public_port"] = 443
         cleaned["listen_port"] = cleaned["ws_port"]
+    elif is_import_protocol(protocol_type):
+        link_info, link_errors = parse_imported_vless_link(str(form.get("last_vless_link") or ""))
+        errors.extend(link_errors)
+        if link_info:
+            apply_imported_vless_defaults(cleaned, link_info)
+            if not str(cleaned.get("name") or "").strip() and link_info.get("remark"):
+                cleaned["name"] = str(link_info["remark"])[:80]
     else:
         cleaned["front_node_id"] = None
         cleaned["backend_node_id"] = None
@@ -350,7 +432,7 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
         cleaned["ws_port"] = 8080
         cleaned["ws_path"] = "/"
 
-    if not is_chain_protocol(protocol_type):
+    if not is_chain_protocol(protocol_type) and not is_import_protocol(protocol_type):
         host_value = str(cleaned.get("ip") or "").strip()
         if host_value and not is_valid_ip_or_hostname(host_value):
             errors.append("NAT IP 可填写 IP 或 DDNS 域名，例如 1.2.3.4 / hinet.example.com")
@@ -376,6 +458,7 @@ def protocol_label(protocol_type: object) -> str:
         PROTOCOL_DIRECT: "vless",
         PROTOCOL_CHAIN: "vless",
         PROTOCOL_TUNNEL: "tunnel",
+        PROTOCOL_IMPORT: "import",
         "hy2": "hy2",
         "hysteria2": "hy2",
     }
@@ -431,10 +514,12 @@ def render_node_form(
             "protocol_direct": PROTOCOL_DIRECT,
             "protocol_chain": PROTOCOL_CHAIN,
             "protocol_tunnel": PROTOCOL_TUNNEL,
+            "protocol_import": PROTOCOL_IMPORT,
             "chain_mode": CHAIN_MODE,
             "form_kind": form_kind,
             "is_chain_form": form_kind == "chain" or form_values.get("protocol_type") == PROTOCOL_CHAIN,
             "is_tunnel_form": form_values.get("protocol_type") == PROTOCOL_TUNNEL,
+            "is_import_form": form_kind == "import" or form_values.get("protocol_type") == PROTOCOL_IMPORT,
         },
     )
 
@@ -506,6 +591,7 @@ SUBSCRIPTION_SCOPES = {
     "all": None,
     "direct": (PROTOCOL_DIRECT, PROTOCOL_TUNNEL),
     "chain": PROTOCOL_CHAIN,
+    "import": PROTOCOL_IMPORT,
 }
 
 
@@ -554,6 +640,8 @@ def display_protocol_label(protocol_type: str | None) -> str:
         return "tunnel"
     if protocol_type == PROTOCOL_CHAIN:
         return "chain"
+    if protocol_type == PROTOCOL_IMPORT:
+        return "import"
     return "vless"
 
 
@@ -732,15 +820,17 @@ async def nodes_page(request: Request):
             "badge_text": badge_text,
             "last_vless_link": display_vless_link_for_node(node, node_by_id),
             "tags": tag_map.get(node["node_id"], []),
-            "can_reinstall": True,
+            "can_reinstall": node["protocol_type"] != PROTOCOL_IMPORT,
             "is_chain": is_chain,
         })
-    direct_nodes = [node for node in nodes if not node["is_chain"]]
+    direct_nodes = [node for node in nodes if node["protocol_type"] in {PROTOCOL_DIRECT, PROTOCOL_TUNNEL}]
     chain_nodes = [node for node in nodes if node["is_chain"]]
+    import_nodes = [node for node in nodes if node["protocol_type"] == PROTOCOL_IMPORT]
     subscription_urls = {
         "all": {"v2rayn": build_subscription_url(request), "clash": build_clash_subscription_url(request)},
         "direct": {"v2rayn": build_subscription_url(request, "direct"), "clash": build_clash_subscription_url(request, "direct")},
         "chain": {"v2rayn": build_subscription_url(request, "chain"), "clash": build_clash_subscription_url(request, "chain")},
+        "import": {"v2rayn": build_subscription_url(request, "import"), "clash": build_clash_subscription_url(request, "import")},
     }
     return templates.TemplateResponse(
         request,
@@ -751,6 +841,7 @@ async def nodes_page(request: Request):
             "nodes": nodes,
             "direct_nodes": direct_nodes,
             "chain_nodes": chain_nodes,
+            "import_nodes": import_nodes,
             "subscription_url": subscription_urls["all"]["v2rayn"],
             "clash_subscription_url": subscription_urls["all"]["clash"],
             "subscription_urls": subscription_urls,
@@ -770,6 +861,7 @@ async def rotate_subscription_token_action(request: Request):
         "all": {"v2rayn": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="all")), "clash": str(request.url_for("clash_subscription_feed", token=new_token).include_query_params(scope="all"))},
         "direct": {"v2rayn": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="direct")), "clash": str(request.url_for("clash_subscription_feed", token=new_token).include_query_params(scope="direct"))},
         "chain": {"v2rayn": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="chain")), "clash": str(request.url_for("clash_subscription_feed", token=new_token).include_query_params(scope="chain"))},
+        "import": {"v2rayn": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="import")), "clash": str(request.url_for("clash_subscription_feed", token=new_token).include_query_params(scope="import"))},
     }
     return JSONResponse({
         "ok": True,
@@ -840,6 +932,21 @@ async def chain_node_create_page(request: Request):
     )
 
 
+@app.get("/nodes/new-import", response_class=HTMLResponse)
+@login_required
+async def import_node_create_page(request: Request):
+    values = default_form_values()
+    values["protocol_type"] = PROTOCOL_IMPORT
+    values["ssh_user"] = "imported"
+    return render_node_form(
+        request,
+        title="导入节点",
+        mode="create",
+        form_values=values,
+        form_kind="import",
+    )
+
+
 @app.post("/nodes/new", response_class=HTMLResponse)
 @login_required
 async def node_create_submit(
@@ -860,6 +967,7 @@ async def node_create_submit(
     backend_node_id: str = Form(""),
     manual_country_code: str = Form(""),
     manual_region_label: str = Form(""),
+    last_vless_link: str = Form(""),
 ):
     payload, errors = clean_node_form(
         {
@@ -879,6 +987,7 @@ async def node_create_submit(
             "backend_node_id": backend_node_id,
             "manual_country_code": manual_country_code,
             "manual_region_label": manual_region_label,
+            "last_vless_link": last_vless_link,
         }
     )
 
@@ -890,13 +999,50 @@ async def node_create_submit(
     if errors:
         return render_node_form(
             request,
-            title="新建链式节点" if is_chain_protocol(payload.get("protocol_type")) else "新建节点",
+            title=("新建链式节点" if is_chain_protocol(payload.get("protocol_type")) else ("导入节点" if is_import_protocol(payload.get("protocol_type")) else "新建节点")),
             mode="create",
             form_values=payload,
             errors=errors,
-            form_kind="chain" if is_chain_protocol(payload.get("protocol_type")) else "direct",
+            form_kind=("chain" if is_chain_protocol(payload.get("protocol_type")) else ("import" if is_import_protocol(payload.get("protocol_type")) else "direct")),
         )
 
+    node_id = create_node_record(payload)
+    return RedirectResponse(url=f"/nodes/{node_id}", status_code=303)
+
+
+@app.post("/nodes/new-import", response_class=HTMLResponse)
+@login_required
+async def import_node_create_submit(
+    request: Request,
+    name: str = Form(""),
+    last_vless_link: str = Form(""),
+    manual_country_code: str = Form(""),
+    manual_region_label: str = Form(""),
+):
+    payload, errors = clean_node_form(
+        {
+            "name": name,
+            "ip": "",
+            "ssh_port": "",
+            "ssh_user": "imported",
+            "ssh_password": "",
+            "public_port": "",
+            "listen_port": "",
+            "protocol_type": PROTOCOL_IMPORT,
+            "last_vless_link": last_vless_link,
+            "manual_country_code": manual_country_code,
+            "manual_region_label": manual_region_label,
+        }
+    )
+    if errors:
+        return render_node_form(
+            request,
+            title="导入节点",
+            mode="create",
+            form_values=payload,
+            errors=errors,
+            form_kind="import",
+        )
     node_id = create_node_record(payload)
     return RedirectResponse(url=f"/nodes/{node_id}", status_code=303)
 
@@ -947,7 +1093,7 @@ def build_chain_link(chain_node: dict[str, object], front_node: dict[str, object
         "encryption": "none",
         "flow": "xtls-rprx-vision",
         "security": "reality",
-        "sni": front_node.get("selected_reality_target") or "www.microsoft.com",
+        "sni": front_node.get("selected_reality_target") or "www.cloudflare.com",
         "fp": "chrome",
         "pbk": front_node.get("generated_public_key") or "",
         "sid": front_node.get("generated_short_id") or "",
@@ -1102,6 +1248,7 @@ async def node_detail_page(request: Request, node_id: str):
             "latest_deploy_id": latest_deploy_id,
             "is_chain": bool(node["protocol_type"] == PROTOCOL_CHAIN),
             "is_tunnel": bool(node["protocol_type"] == PROTOCOL_TUNNEL),
+            "is_import": bool(node["protocol_type"] == PROTOCOL_IMPORT),
             "protocol_label": protocol_label(node["protocol_type"]),
             "node_tags": tag_map.get(node_id, []) if (tag_map := list_node_tags_map()) else [],
         },
@@ -1126,7 +1273,7 @@ async def node_edit_page(request: Request, node_id: str):
         mode="edit",
         node_id=node_id,
         form_values=node_to_form_values(node),
-        form_kind="chain" if node["protocol_type"] == PROTOCOL_CHAIN else "direct",
+        form_kind=("chain" if node["protocol_type"] == PROTOCOL_CHAIN else ("import" if node["protocol_type"] == PROTOCOL_IMPORT else "direct")),
     )
 
 
@@ -1151,6 +1298,7 @@ async def node_edit_submit(
     backend_node_id: str = Form(""),
     manual_country_code: str = Form(""),
     manual_region_label: str = Form(""),
+    last_vless_link: str = Form(""),
 ):
     node = get_node(node_id)
     if not node:
@@ -1179,6 +1327,7 @@ async def node_edit_submit(
             "backend_node_id": backend_node_id,
             "manual_country_code": manual_country_code,
             "manual_region_label": manual_region_label,
+            "last_vless_link": last_vless_link,
         },
         editing_node_id=node_id,
     )
@@ -1200,13 +1349,15 @@ async def node_edit_submit(
             node_id=node_id,
             form_values=payload,
             errors=errors,
-            form_kind="chain" if is_chain_protocol(payload.get("protocol_type")) else "direct",
+            form_kind=("chain" if is_chain_protocol(payload.get("protocol_type")) else ("import" if is_import_protocol(payload.get("protocol_type")) else "direct")),
         )
 
     if is_tunnel_protocol(payload.get("protocol_type")):
         existing = dict(node)
         existing.update(payload)
         payload["last_vless_link"] = build_tunnel_vless_link(existing) or str(node["last_vless_link"] or "")
+    elif is_import_protocol(payload.get("protocol_type")):
+        payload["last_vless_link"] = str(node["last_vless_link"] or payload.get("last_vless_link") or "")
     else:
         existing = dict(node)
         existing.update(payload)

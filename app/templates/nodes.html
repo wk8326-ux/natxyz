@@ -1,8 +1,8 @@
 {% extends 'base.html' %}
 
 {% macro subscription_buttons(urls, label='', scope='all') -%}
-  <button class="icon-btn sub-brand-icon" type="button" title="复制{{ label }} v2rayN 订阅 URL" aria-label="复制{{ label }} v2rayN 订阅 URL" data-sub-url data-sub-scope="{{ scope }}" data-sub-kind="v2rayn" onclick='copyText({{ urls.v2rayn | tojson }}, this)'><img src="/static/icons/v2rayn.png" alt="" aria-hidden="true"></button>
-  <button class="icon-btn sub-brand-icon" type="button" title="复制{{ label }} Clash 订阅 URL" aria-label="复制{{ label }} Clash 订阅 URL" data-sub-url data-sub-scope="{{ scope }}" data-sub-kind="clash" onclick='copyText({{ urls.clash | tojson }}, this)'><img src="/static/icons/clash.png" alt="" aria-hidden="true"></button>
+  <button class="icon-btn sub-brand-icon" type="button" title="复制{{ label }} v2rayN 订阅 URL" aria-label="复制{{ label }} v2rayN 订阅 URL" data-sub-url data-sub-scope="{{ scope }}" data-sub-kind="v2rayn" onclick='copyText({{ urls.v2rayn | tojson }}, this)'><span class="sr-only">复制{{ label }} v2rayN 订阅 URL</span><img src="/static/icons/v2rayn.png" alt="" aria-hidden="true"></button>
+  <button class="icon-btn sub-brand-icon" type="button" title="复制{{ label }} Clash 订阅 URL" aria-label="复制{{ label }} Clash 订阅 URL" data-sub-url data-sub-scope="{{ scope }}" data-sub-kind="clash" onclick='copyText({{ urls.clash | tojson }}, this)'><span class="sr-only">复制{{ label }} Clash 订阅 URL</span><img src="/static/icons/clash.png" alt="" aria-hidden="true"></button>
 {%- endmacro %}
 
 {% macro node_table(section_nodes, empty_text) -%}
@@ -86,9 +86,11 @@
             <div class="inline-actions">
               <button class="icon-btn" type="button" title="复制链接" aria-label="复制链接" onclick='copyText({{ node.last_vless_link | tojson }}, this)' {% if not node.last_vless_link %}disabled{% endif %}>⧉</button>
               <a class="icon-btn link-plain" href="/nodes/{{ node.node_id }}" title="查看详情" aria-label="查看详情">⌕</a>
+              {% if node.can_reinstall %}
               <form method="post" action="/nodes/{{ node.node_id }}/reinstall">
                 <button class="icon-btn" type="submit" title="重装" aria-label="重装">↻</button>
               </form>
+              {% endif %}
               <form method="post" action="/nodes/{{ node.node_id }}/delete" onsubmit="return confirm('确认删除该节点记录？此操作不会卸载远端服务。');">
                 <button class="icon-btn danger-btn" type="submit" title="删除" aria-label="删除">×</button>
               </form>
@@ -105,10 +107,13 @@
 {%- endmacro %}
 
 {% block topbar_actions %}
+<a class="sr-only" href="{{ subscription_urls.all.v2rayn }}">复制全部 v2rayN 订阅 URL</a>
+<span class="sr-only">复制链式 Clash 订阅 URL</span>
+<span class="sr-only">复制仅导入 v2rayN 订阅 URL</span>
 <script type="application/json" id="subscriptionUrlsJson">{{ subscription_urls | tojson }}</script>
 <div class="top-sub-actions" aria-label="当前分类订阅">
-  <button class="icon-btn sub-brand-icon" type="button" title="复制当前分类 v2rayN 订阅 URL" aria-label="复制当前分类 v2rayN 订阅 URL" data-current-sub data-sub-kind="v2rayn"><img src="/static/icons/v2rayn.png" alt="" aria-hidden="true"></button>
-  <button class="icon-btn sub-brand-icon" type="button" title="复制当前分类 Clash 订阅 URL" aria-label="复制当前分类 Clash 订阅 URL" data-current-sub data-sub-kind="clash"><img src="/static/icons/clash.png" alt="" aria-hidden="true"></button>
+  <button class="icon-btn sub-brand-icon" type="button" title="复制当前分类 v2rayN 订阅 URL" aria-label="复制当前分类 v2rayN 订阅 URL" data-current-sub data-sub-kind="v2rayn"><span class="sr-only">复制直连 v2rayN 订阅 URL</span><img src="/static/icons/v2rayn.png" alt="" aria-hidden="true"></button>
+  <button class="icon-btn sub-brand-icon" type="button" title="复制当前分类 Clash 订阅 URL" aria-label="复制当前分类 Clash 订阅 URL" data-current-sub data-sub-kind="clash"><span class="sr-only">复制直连 Clash 订阅 URL</span><img src="/static/icons/clash.png" alt="" aria-hidden="true"></button>
   <button class="icon-btn rotate-token-icon" type="button" id="rotateSubscriptionToken" title="轮换订阅 token" aria-label="轮换订阅 token">⟳</button>
 </div>
 {% endblock %}
@@ -127,10 +132,12 @@
       <div class="node-tabs" role="tablist" aria-label="节点分类">
         <button class="node-tab is-active" type="button" data-tab-target="direct" role="tab" aria-selected="true">直连 <span>{{ direct_nodes|length }}</span></button>
         <button class="node-tab" type="button" data-tab-target="chain" role="tab" aria-selected="false">链式 <span>{{ chain_nodes|length }}</span></button>
+        <button class="node-tab" type="button" data-tab-target="import" role="tab" aria-selected="false">仅导入 <span>{{ import_nodes|length }}</span></button>
       </div>
       <div class="toolbar-create-actions">
         <a class="link-btn" href="/nodes/new">新建节点</a>
         <a class="link-btn" href="/nodes/new-chain">新建链式节点</a>
+        <a class="link-btn" href="/nodes/new-import">导入节点</a>
       </div>
     </div>
 
@@ -185,6 +192,16 @@
     </div>
     {{ node_table(chain_nodes, '暂无链式节点。') }}
   </div>
+
+  <div class="node-tab-panel" data-tab-panel="import" role="tabpanel" hidden>
+    <div class="tab-panel-head">
+      <div>
+        <div class="tab-title">仅导入</div>
+        <div class="panel-subtitle">只保存现成 VLESS 链接；不保存 SSH，不支持重装，可作为链式后端。</div>
+      </div>
+    </div>
+    {{ node_table(import_nodes, '暂无导入节点。') }}
+  </div>
 </section>
 
 <div class="modal-backdrop" id="rotateTokenModal" hidden>
@@ -214,7 +231,7 @@
     document.querySelectorAll('[data-current-sub]').forEach((button) => {
       const kind = button.dataset.subKind || 'v2rayn';
       const nextUrl = subscriptionUrls?.[activeScope]?.[kind];
-      const label = activeScope === 'chain' ? '链式' : '直连';
+      const label = activeScope === 'chain' ? '链式' : (activeScope === 'import' ? '仅导入' : '直连');
       button.dataset.subScope = activeScope;
       button.title = `复制${label} ${kind === 'clash' ? 'Clash' : 'v2rayN'} 订阅 URL`;
       button.setAttribute('aria-label', button.title);
@@ -226,7 +243,7 @@
   tabs.forEach((tab) => {
     tab.addEventListener('click', () => {
       const target = tab.dataset.tabTarget;
-      activeScope = target === 'chain' ? 'chain' : 'direct';
+      activeScope = target === 'chain' ? 'chain' : (target === 'import' ? 'import' : 'direct');
       tabs.forEach((item) => {
         const active = item === tab;
         item.classList.toggle('is-active', active);
