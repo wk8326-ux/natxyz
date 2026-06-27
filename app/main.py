@@ -183,6 +183,7 @@ def node_to_form_values(node) -> dict[str, object]:
         "chain_mode": node["chain_mode"],
         "manual_country_code": node["manual_country_code"] or "",
         "manual_region_label": node["manual_region_label"] or "",
+        "selected_reality_target": node["selected_reality_target"] or "www.cloudflare.com",
         "cf_host": node["cf_host"] or "",
         "cf_tunnel_token": node["cf_tunnel_token"] or "",
         "ws_port": node["ws_port"] or 8080,
@@ -207,6 +208,7 @@ def default_form_values() -> dict[str, object]:
         "chain_mode": CHAIN_MODE,
         "manual_country_code": "",
         "manual_region_label": "",
+        "selected_reality_target": "www.cloudflare.com",
         "cf_host": "",
         "cf_tunnel_token": "",
         "ws_port": 8080,
@@ -228,6 +230,18 @@ def normalize_host_value(value: str) -> str:
         if maybe_port.isdigit():
             value = host_part
     return value.strip().lower()
+
+
+def normalize_reality_target(value: str) -> tuple[str, bool]:
+    raw = str(value or "").strip().lower()
+    raw = raw.replace("https://", "").replace("http://", "").strip().strip("/")
+    if "/" in raw:
+        raw = raw.split("/", 1)[0]
+    if raw.startswith("[") and "]" in raw:
+        return raw[1:raw.index("]")].strip(), False
+    if raw.count(":") == 1 and raw.rsplit(":", 1)[1].isdigit():
+        return raw, True
+    return raw, False
 
 
 _HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$")
@@ -370,6 +384,12 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
         errors.append("国家/地区代码请填写两位字母，例如 JP / HK / US")
     cleaned["manual_country_code"] = manual_country_code or None
     cleaned["manual_region_label"] = manual_region_label or None
+    reality_target, reality_target_has_port = normalize_reality_target(str(form.get("selected_reality_target") or ""))
+    if reality_target_has_port:
+        errors.append("Reality 伪装目标只填域名，不要带端口；端口固定使用 443")
+    if reality_target and not is_valid_ip_or_hostname(reality_target):
+        errors.append("Reality 伪装目标请输入有效域名，例如 www.cloudflare.com")
+    cleaned["selected_reality_target"] = reality_target or "www.cloudflare.com"
     cf_host = str(form.get("cf_host") or "").strip().lower().replace("https://", "").replace("http://", "").strip("/")
     cf_tunnel_token = str(form.get("cf_tunnel_token") or "").strip()
     ws_path = str(form.get("ws_path") or "/").strip() or "/"
@@ -431,6 +451,9 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
         cleaned["cf_tunnel_token"] = None
         cleaned["ws_port"] = 8080
         cleaned["ws_path"] = "/"
+
+    if is_chain_protocol(protocol_type) or is_import_protocol(protocol_type) or is_tunnel_protocol(protocol_type):
+        cleaned["selected_reality_target"] = None
 
     if not is_chain_protocol(protocol_type) and not is_import_protocol(protocol_type):
         host_value = str(cleaned.get("ip") or "").strip()
@@ -959,6 +982,7 @@ async def node_create_submit(
     public_port: str = Form(""),
     listen_port: str = Form(""),
     protocol_type: str = Form(PROTOCOL_DIRECT),
+    selected_reality_target: str = Form(""),
     cf_host: str = Form(""),
     cf_tunnel_token: str = Form(""),
     ws_port: str = Form("8080"),
@@ -979,6 +1003,7 @@ async def node_create_submit(
             "public_port": public_port,
             "listen_port": listen_port,
             "protocol_type": protocol_type,
+            "selected_reality_target": selected_reality_target,
             "cf_host": cf_host,
             "cf_tunnel_token": cf_tunnel_token,
             "ws_port": ws_port,
@@ -1290,6 +1315,7 @@ async def node_edit_submit(
     public_port: str = Form(""),
     listen_port: str = Form(""),
     protocol_type: str = Form(PROTOCOL_DIRECT),
+    selected_reality_target: str = Form(""),
     cf_host: str = Form(""),
     cf_tunnel_token: str = Form(""),
     ws_port: str = Form("8080"),
@@ -1319,6 +1345,7 @@ async def node_edit_submit(
             "public_port": public_port,
             "listen_port": listen_port,
             "protocol_type": protocol_type,
+            "selected_reality_target": selected_reality_target,
             "cf_host": cf_host,
             "cf_tunnel_token": cf_tunnel_token,
             "ws_port": ws_port,

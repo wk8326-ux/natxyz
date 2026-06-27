@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import urllib.parse
 import uuid
@@ -11,7 +12,7 @@ os.environ.setdefault("NAT_WEBUI_DB_PATH", f"/tmp/nat_webui_test_{uuid.uuid4().h
 
 from app import jobs, main
 from app.chain_deployer import build_front_chain_config
-from app.deployer import build_remote_script, build_vless_link, resolve_host_for_ssh
+from app.deployer import build_remote_script, build_singbox_config, build_vless_link, choose_reality_target, generate_reality_materials, resolve_host_for_ssh
 from app.db import create_deployment_record, create_node_record, get_deployment, get_node, init_db, list_chain_backend_nodes, list_direct_vless_nodes, list_nodes, mark_deployment_failed, set_node_generated_fields
 from app.main import app, build_subscription_payload, display_vless_link_for_node
 from app.link_labels import replace_vless_fragment, vless_remark_for_node
@@ -172,6 +173,7 @@ def test_create_reinstall_and_delete_node_flow(monkeypatch) -> None:
             "ssh_password": "test-pass",
             "public_port": "44321",
             "listen_port": "2443",
+            "selected_reality_target": "www.microsoft.com",
         },
         follow_redirects=False,
     )
@@ -195,6 +197,7 @@ def test_create_reinstall_and_delete_node_flow(monkeypatch) -> None:
             "ssh_password": "test-pass-2",
             "public_port": "44322",
             "listen_port": "2444",
+            "selected_reality_target": "www.apple.com",
         },
         follow_redirects=False,
     )
@@ -203,6 +206,8 @@ def test_create_reinstall_and_delete_node_flow(monkeypatch) -> None:
 
     edited_detail = client.get(detail_url)
     assert "NAT_TEST_EDITED" in edited_detail.text
+    node_after_edit = get_node(node_id)
+    assert node_after_edit["selected_reality_target"] == "www.apple.com"
     assert "44322" in edited_detail.text
     assert "2444" in edited_detail.text
 
@@ -286,6 +291,69 @@ def test_create_node_accepts_ddns_domain_as_ip_field_and_preserves_link_host() -
         selected_reality_target="www.cloudflare.com",
     )
     assert "@hinet.example.com:20282" in link
+
+
+def test_create_node_normalizes_custom_reality_target() -> None:
+    login()
+    response = client.post(
+        "/nodes/new",
+        data={
+            "name": "CUSTOM_REALITY_NODE",
+            "ip": "198.51.100.88",
+            "ssh_port": "2388",
+            "ssh_user": "root",
+            "ssh_password": "custom-pass",
+            "public_port": "44388",
+            "listen_port": "443",
+            "protocol_type": "vless_reality_singbox",
+            "selected_reality_target": "https://WWW.MICROSOFT.COM/",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    node = get_node(response.headers["location"].rsplit("/", 1)[-1])
+    assert node["selected_reality_target"] == "www.microsoft.com"
+
+
+def test_create_node_rejects_reality_target_with_port() -> None:
+    login()
+    response = client.post(
+        "/nodes/new",
+        data={
+            "name": "BAD_REALITY_NODE",
+            "ip": "198.51.100.89",
+            "ssh_port": "2389",
+            "ssh_user": "root",
+            "ssh_password": "custom-pass",
+            "public_port": "44389",
+            "listen_port": "443",
+            "protocol_type": "vless_reality_singbox",
+            "selected_reality_target": "www.microsoft.com:443",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 200
+    assert "Reality 伪装目标只填域名" in response.text
+
+
+def test_deployer_uses_node_custom_reality_target() -> None:
+    assert choose_reality_target({"selected_reality_target": "www.microsoft.com"}) == "www.microsoft.com"
+    generated_uuid, generated_private_key, _generated_public_key, generated_short_id = generate_reality_materials()
+    config_text = build_singbox_config(
+        {"listen_port": 443, "selected_reality_target": "www.microsoft.com"},
+        generated_uuid=generated_uuid,
+        generated_private_key=generated_private_key,
+        generated_short_id=generated_short_id,
+        selected_reality_target=choose_reality_target({"selected_reality_target": "www.microsoft.com"}),
+    )
+    config = json.loads(config_text)
+    tls = config["inbounds"][0]["tls"]
+    assert tls["server_name"] == "www.microsoft.com"
+    assert tls["reality"]["handshake"]["server"] == "www.microsoft.com"
+
+
+def test_deployer_defaults_reality_target_when_blank() -> None:
+    assert choose_reality_target({"selected_reality_target": ""}) == "www.cloudflare.com"
 
 
 def test_vless_link_remark_uses_manual_country_flag() -> None:

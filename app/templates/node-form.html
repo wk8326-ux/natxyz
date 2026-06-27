@@ -149,6 +149,13 @@
         <span>内网监听端口</span>
         <input type="number" name="listen_port" value="{{ form_values['listen_port'] }}" min="1" max="65535">
       </label>
+      <label class="vless-only">
+        <span>Reality 伪装目标</span>
+        <input type="text" name="selected_reality_target" value="{{ form_values.get('selected_reality_target') or 'www.cloudflare.com' }}" placeholder="www.cloudflare.com">
+      </label>
+      <div class="full-span vless-only">
+        <div class="field-note">只填域名，不带 https:// 和端口；脚本会同时写入 Reality server_name / handshake server，端口固定 443。</div>
+      </div>
       <label class="tunnel-only">
         <span>应用路由域名</span>
         <input type="text" name="cf_host" value="{{ form_values.get('cf_host', '') }}" placeholder="jp02.holdzywoo.top">
@@ -176,7 +183,7 @@
       </label>
       <div class="full-span">
         <div class="field-note tunnel-note">Tunnel 模式默认本机 8080；Cloudflare Zero Trust 的 Public Hostname / 应用路由需要指向该本地端口。</div>
-        <div class="field-note vless-note">VLESS 模式这里可填固定 IP 或 DDNS 域名；部署 SSH 会自动解析域名，最终 VLESS 链接仍使用你填写的域名。地区留空则自动按当前解析 IP 识别；手动填写后优先使用手动值。</div>
+        <div class="field-note vless-note">VLESS 模式这里可填固定 IP 或 DDNS 域名；Reality 伪装目标可自定义，留默认即可；地区留空则自动按当前解析 IP 识别，手动填写后优先使用手动值。</div>
       </div>
       {% endif %}
     </div>

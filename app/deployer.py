@@ -134,8 +134,9 @@ def shell_quote(value: str) -> str:
 
 
 
-def choose_reality_target() -> str:
-    return "www.cloudflare.com"
+def choose_reality_target(node: dict | None = None) -> str:
+    target = str((node or {}).get("selected_reality_target") or "").strip().lower()
+    return target or "www.cloudflare.com"
 
 
 
@@ -680,7 +681,7 @@ def run_real_deploy(node: dict) -> DeployResult:
 
     protocol_type = str(node.get("protocol_type") or "vless")
     generated_uuid, generated_private_key, generated_public_key, generated_short_id = generate_reality_materials()
-    selected_reality_target = choose_reality_target()
+    selected_reality_target = choose_reality_target(node)
 
     if protocol_type == "cf_vless_ws":
         singbox_config = build_tunnel_singbox_config(node, generated_uuid=generated_uuid)
