@@ -990,8 +990,8 @@ def test_build_front_chain_config_uses_imported_reality_backend() -> None:
     assert out["tls"]["reality"]["public_key"] == "import-pub"
     assert out["tls"]["reality"]["short_id"] == "import-sid"
     rule = updated["route"]["rules"][0]
-    assert rule["user"] == ["chain-import"]
-    assert "auth_user" not in rule
+    assert rule["auth_user"] == ["chain-import"]
+    assert "user" not in rule
 
 def test_phase2_markdown_exists() -> None:
     with open("PHASE2.md", "r", encoding="utf-8") as f:
