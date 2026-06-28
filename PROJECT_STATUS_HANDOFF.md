@@ -22,7 +22,7 @@
 
 ## GitHub / 本地代码状态
 
-- GitHub 仓库：`yun8811/natwebui`
+- GitHub 仓库：`wk8326-ux/natxyz`
 - GitHub main 已推送最近变更，继续开发前以 `git status --short` 和远端 `main` 为准
 - 当前源码已整理并推送；运行目录若有本地数据、日志或 `.env.runtime`，不得上传。
 - 如果后续继续开发，先执行：
@@ -174,4 +174,4 @@ bash scripts/start.sh
 1. 进入实际运行目录：`/opt/natxyz`，或进入当前部署实际使用的项目目录
 2. 查看当前本地改动：`git status --short && git diff --stat`
 3. 确认页面/订阅是否正常：检查 `/nodes` 是否有“直连 / 链式 / 仅导入”，订阅链接是否带 `scope=direct`、`scope=chain`、`scope=import`
-4. 若继续开发，先在干净工作区验证、脱敏扫描，再同步到 GitHub 仓库 `yun8811/natwebui`
+4. 若继续开发，先在干净工作区验证、脱敏扫描，再同步到 GitHub 仓库 `wk8326-ux/natxyz`

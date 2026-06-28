@@ -4,7 +4,7 @@
 
 当前实际运行目录：按部署环境决定；生产环境建议使用 `/opt/natxyz` 或独立工作目录。
 
-GitHub 仓库：`yun8811/natwebui`
+GitHub 仓库：`wk8326-ux/natxyz`
 
 运行端口：`8788`（可通过 `NAT_WEBUI_PORT` 环境变量自定义）
 
