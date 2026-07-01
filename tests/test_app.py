@@ -13,7 +13,7 @@ os.environ.setdefault("NAT_WEBUI_DB_PATH", f"/tmp/nat_webui_test_{uuid.uuid4().h
 
 from app import jobs, main
 from app.chain_deployer import build_front_chain_config
-from app.deployer import DeployedNodeResult, DeployResult, build_remote_script, build_singbox_config, build_vless_link, choose_reality_target, generate_reality_materials, resolve_host_for_ssh
+from app.deployer import DeployedNodeResult, DeployResult, build_agent_script, build_remote_script, build_singbox_config, build_vless_link, choose_reality_target, generate_reality_materials, resolve_host_for_ssh
 from app.db import create_deployment_record, create_node_record, get_deployment, get_node, init_db, list_chain_backend_nodes, list_direct_vless_nodes, list_nodes, mark_deployment_failed, set_node_generated_fields
 from app.main import app, build_clash_subscription_payload, build_subscription_payload, display_vless_link_for_node
 from app.link_labels import replace_vless_fragment, vless_remark_for_node
@@ -458,6 +458,17 @@ def test_create_node_rejects_reality_target_with_port() -> None:
     )
     assert response.status_code == 200
     assert "Reality 伪装目标只填域名" in response.text
+
+def test_build_agent_script_reads_public_base_url_at_runtime(monkeypatch) -> None:
+    monkeypatch.delenv("NAT_WEBUI_PUBLIC_BASE_URL", raising=False)
+    node = {"node_id": "node_agent", "name": "Agent", "ip": "node.example.com", "agent_token": "token"}
+    with pytest.raises(Exception):
+        build_agent_script(node)
+
+    monkeypatch.setenv("NAT_WEBUI_PUBLIC_BASE_URL", "https://panel.example.com/")
+    script = build_agent_script(node)
+    assert "https://panel.example.com/agent/report" in script
+
 
 def test_hysteria2_remote_script_checks_udp_listener() -> None:
     from app.deployer import build_remote_script

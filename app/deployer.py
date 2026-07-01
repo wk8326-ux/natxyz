@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import shlex
 import socket
 import subprocess
@@ -17,7 +18,7 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
-from .config import AGENT_REPORT_PATH, APP_DIR, PUBLIC_BASE_URL
+from .config import AGENT_REPORT_PATH, APP_DIR
 from .protocols.models import ProtocolBuildContext
 from .protocols.hysteria2 import Hysteria2Protocol  # noqa: F401 - register protocol
 from .protocols.registry import get_protocol
@@ -355,9 +356,10 @@ def build_multi_node_meta(entries: list[dict[str, Any]]) -> str:
 
 
 def build_agent_script(node: dict) -> str:
-    if not PUBLIC_BASE_URL:
+    public_base_url = os.getenv("NAT_WEBUI_PUBLIC_BASE_URL", "").rstrip("/")
+    if not public_base_url:
         raise DeployError("prepare", "缺少 NAT_WEBUI_PUBLIC_BASE_URL，无法生成 Agent 上报地址", "NAT_WEBUI_PUBLIC_BASE_URL is required")
-    report_url = f"{PUBLIC_BASE_URL}{AGENT_REPORT_PATH}"
+    report_url = f"{public_base_url}{AGENT_REPORT_PATH}"
     public_ip = json.dumps(node["ip"], ensure_ascii=False)
     script = """#!/bin/sh
 set -eu
