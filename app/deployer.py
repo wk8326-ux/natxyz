@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 from .config import AGENT_REPORT_PATH, APP_DIR, PUBLIC_BASE_URL
@@ -175,8 +176,19 @@ def generate_reality_materials() -> tuple[str, str, str, str]:
     generated_uuid = str(uuid.uuid4())
     private_key_obj = X25519PrivateKey.generate()
     public_key_obj = private_key_obj.public_key()
-    generated_private_key = urlsafe_b64encode(private_key_obj.private_bytes_raw()).decode().rstrip("=")
-    generated_public_key = urlsafe_b64encode(public_key_obj.public_bytes_raw()).decode().rstrip("=")
+    generated_private_key = urlsafe_b64encode(
+        private_key_obj.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    ).decode().rstrip("=")
+    generated_public_key = urlsafe_b64encode(
+        public_key_obj.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+    ).decode().rstrip("=")
     generated_short_id = uuid.uuid4().hex[:16]
     return generated_uuid, generated_private_key, generated_public_key, generated_short_id
 
@@ -477,7 +489,7 @@ PYEOF
           fi
           hy2_server_name=$(python3 - <<'PYEOF_HY2'
 import json
-cfg=json.load(open({shell_quote(REMOTE_SINGBOX_CONFIG)}))
+cfg=json.load(open({REMOTE_SINGBOX_CONFIG!r}))
 for inbound in cfg.get('inbounds', []):
     if inbound.get('type') == 'hysteria2':
         print((inbound.get('tls') or {{}}).get('server_name') or 'www.example.com')
