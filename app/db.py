@@ -992,13 +992,21 @@ def mark_node_deployed_from_report(node_id: str, payload: dict[str, Any]) -> Non
             selected_reality_target = "www.example.com"
         if not last_vless_link:
             if str(payload.get("protocol_type") or "") == "hysteria2":
+                import base64
                 from urllib.parse import quote, urlencode
+                pin_for_uri = generated_public_key
+                try:
+                    decoded_pin = base64.b64decode(generated_public_key, validate=True)
+                    if len(decoded_pin) == 32:
+                        pin_for_uri = decoded_pin.hex()
+                except Exception:
+                    pass
                 query = urlencode({
                     "sni": selected_reality_target,
                     "obfs": "none",
                     "upmbps": "200",
                     "downmbps": "1000",
-                    "pinSHA256": generated_public_key,
+                    "pinSHA256": pin_for_uri,
                 })
                 last_vless_link = f"hysteria2://{generated_uuid}@{public_ip}:{public_port}?{query}#{quote(node_name, safe='')}"
             else:

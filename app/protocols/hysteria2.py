@@ -1,10 +1,28 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import urllib.parse
 from typing import Any
 
 from .models import ProtocolBuildContext
 from .registry import register_protocol
+
+
+def _pin_sha256_for_uri(pin: str) -> str:
+    value = str(pin or "").strip()
+    if not value:
+        return ""
+    compact = value.replace(":", "").lower()
+    if len(compact) == 64 and all(ch in "0123456789abcdef" for ch in compact):
+        return compact
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return value
+    if len(decoded) == 32:
+        return decoded.hex()
+    return value
 
 
 class Hysteria2Protocol:
@@ -56,7 +74,7 @@ class Hysteria2Protocol:
             "downmbps": "1000",
         }
         if certificate_pin:
-            query_params["pinSHA256"] = certificate_pin
+            query_params["pinSHA256"] = _pin_sha256_for_uri(certificate_pin)
         else:
             query_params["insecure"] = "1"
         query = urllib.parse.urlencode(query_params)

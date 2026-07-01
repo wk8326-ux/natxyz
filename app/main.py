@@ -778,6 +778,17 @@ def _vless_link_to_clash_proxy(link: str) -> dict[str, object] | None:
     return proxy
 
 
+def _pin_sha256_to_base64(pin: str) -> str:
+    value = str(pin or "").strip()
+    compact = value.replace(":", "").lower()
+    if len(compact) == 64 and all(ch in "0123456789abcdef" for ch in compact):
+        try:
+            return base64.b64encode(bytes.fromhex(compact)).decode("ascii")
+        except ValueError:
+            return value
+    return value
+
+
 def _hysteria2_link_to_clash_proxy(link: str) -> dict[str, object] | None:
     try:
         parsed = urllib.parse.urlparse(link)
@@ -801,7 +812,7 @@ def _hysteria2_link_to_clash_proxy(link: str) -> dict[str, object] | None:
         "down": f"{_query_first(query, 'downmbps', '1000')} Mbps",
     }
     if pin_sha256:
-        proxy["certificate-public-key-sha256"] = pin_sha256
+        proxy["certificate-public-key-sha256"] = _pin_sha256_to_base64(pin_sha256)
     obfs = _query_first(query, "obfs")
     if obfs and obfs != "none":
         proxy["obfs"] = obfs
