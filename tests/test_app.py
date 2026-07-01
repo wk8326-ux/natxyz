@@ -110,7 +110,7 @@ def test_hysteria2_handler_builds_inbound_and_share_link() -> None:
     assert "pinSHA256=5654bb70e12df9fe4d1249d8b7a9f93ed55dbbe07a794ad087a1f3fe9589deeb" in link
     assert "pinnedPeerCertSha256=b2c0a1d9a3d4e5f67890123456789abcdef0123456789abcdef0123456789ab" in link
     assert "verifyPeerCertByName=www.example.com" in link
-    assert "insecure=1" not in link
+    assert "insecure=1" in link
     assert "obfs=none" in link
     assert "upmbps=200" in link
     assert "downmbps=1000" in link
@@ -1200,7 +1200,7 @@ def test_create_hysteria2_node_and_subscription_payload() -> None:
     with get_conn() as conn:
         conn.execute(
             "UPDATE nodes SET last_vless_link = ?, generated_uuid = ? WHERE node_id = ?",
-            ("hysteria2://hy2-password@node.example.com:24443?sni=www.example.com&pinSHA256=5654bb70e12df9fe4d1249d8b7a9f93ed55dbbe07a794ad087a1f3fe9589deeb&pinnedPeerCertSha256=b2c0a1d9a3d4e5f67890123456789abcdef0123456789abcdef0123456789ab&verifyPeerCertByName=www.example.com&obfs=none&upmbps=200&downmbps=1000#HY2_CREATE_NODE", "hy2-password", node["node_id"]),
+            ("hysteria2://hy2-password@node.example.com:24443?sni=www.example.com&pinSHA256=5654bb70e12df9fe4d1249d8b7a9f93ed55dbbe07a794ad087a1f3fe9589deeb&pinnedPeerCertSha256=b2c0a1d9a3d4e5f67890123456789abcdef0123456789abcdef0123456789ab&verifyPeerCertByName=www.example.com&insecure=1&obfs=none&upmbps=200&downmbps=1000#HY2_CREATE_NODE", "hy2-password", node["node_id"]),
         )
 
     payload = build_subscription_payload("direct")
@@ -1209,7 +1209,7 @@ def test_create_hysteria2_node_and_subscription_payload() -> None:
 
     clash_payload = build_clash_subscription_payload("direct")
     assert "type: hysteria2" in clash_payload
-    assert "skip-cert-verify: false" in clash_payload
+    assert "skip-cert-verify: true" in clash_payload
     assert "certificate-public-key-sha256: VlS7cOEt+f5NEknYt6n5PtVdu+B6eUrQh6Hz/pWJ3us=" in clash_payload
     assert "certificate-public-key-sha256: ssCh2aPU5fZ4kBI0VniavN7wEjRWeJq83vASNFZ4mrA=" not in clash_payload
     assert "up: 200 Mbps" in clash_payload

@@ -84,6 +84,7 @@ class Hysteria2Protocol:
             query_params["pinSHA256"] = pin_hex
             query_params["pinnedPeerCertSha256"] = peer_cert_hex or pin_hex
             query_params["verifyPeerCertByName"] = server_name
+            query_params["insecure"] = "1"
         else:
             query_params["insecure"] = "1"
         query = urllib.parse.urlencode(query_params)
