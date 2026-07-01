@@ -1208,6 +1208,13 @@ def test_create_hysteria2_node_and_subscription_payload() -> None:
     decoded = base64.b64decode(payload).decode("utf-8")
     assert "hysteria2://hy2-password@node.example.com:24443" in decoded
 
+    xray_payload = build_subscription_payload("direct", client="xray")
+    xray_decoded = base64.b64decode(xray_payload).decode("utf-8")
+    assert "pinSHA256=b2c0a1d9a3d4e5f67890123456789abcdef0123456789abcdef0123456789ab" in xray_decoded
+    assert "insecure=1" not in xray_decoded
+    assert "pinnedPeerCertSha256=" not in xray_decoded
+    assert "verifyPeerCertByName=" not in xray_decoded
+
     clash_payload = build_clash_subscription_payload("direct")
     assert "type: hysteria2" in clash_payload
     assert "skip-cert-verify: true" in clash_payload

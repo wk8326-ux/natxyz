@@ -733,16 +733,17 @@ def _hysteria2_link_for_client(link: str, client: str) -> str:
         return link
     parsed = urllib.parse.urlparse(link)
     query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-    if client == "xray":
-        query["insecure"] = ["1"]
-    else:
+    if client != "xray":
         return link
+    cert_pin = query.get("pinnedPeerCertSha256") or query.get("pinSHA256")
+    if cert_pin:
+        query["pinSHA256"] = [cert_pin[-1]]
+    query.pop("insecure", None)
     ordered = {}
     for key in [
         "sni",
         "peer",
         "pinSHA256",
-        "insecure",
         "obfs",
         "upmbps",
         "downmbps",
