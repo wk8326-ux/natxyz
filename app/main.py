@@ -663,9 +663,12 @@ def subscription_filename(scope: str, kind: str) -> str:
     return f"{prefix}-{suffix}"
 
 
-def build_subscription_url(request: Request, scope: str = "all") -> str:
+def build_subscription_url(request: Request, scope: str = "all", client: str = "default") -> str:
     token = get_or_create_subscription_token()
-    return str(request.url_for("subscription_feed", token=token).include_query_params(scope=normalize_subscription_scope(scope)))
+    params = {"scope": normalize_subscription_scope(scope)}
+    if client != "default":
+        params["client"] = client
+    return str(request.url_for("subscription_feed", token=token).include_query_params(**params))
 
 
 def build_clash_subscription_url(request: Request, scope: str = "all") -> str:
@@ -945,10 +948,10 @@ async def nodes_page(request: Request):
     chain_nodes = [node for node in nodes if node["is_chain"]]
     import_nodes = [node for node in nodes if node["protocol_type"] == PROTOCOL_IMPORT]
     subscription_urls = {
-        "all": {"v2rayn": build_subscription_url(request), "clash": build_clash_subscription_url(request)},
-        "direct": {"v2rayn": build_subscription_url(request, "direct"), "clash": build_clash_subscription_url(request, "direct")},
-        "chain": {"v2rayn": build_subscription_url(request, "chain"), "clash": build_clash_subscription_url(request, "chain")},
-        "imported": {"v2rayn": build_subscription_url(request, "imported"), "clash": build_clash_subscription_url(request, "imported")},
+        "all": {"v2rayng": build_subscription_url(request, client="xray"), "singbox": build_subscription_url(request), "clash": build_clash_subscription_url(request)},
+        "direct": {"v2rayng": build_subscription_url(request, "direct", client="xray"), "singbox": build_subscription_url(request, "direct"), "clash": build_clash_subscription_url(request, "direct")},
+        "chain": {"v2rayng": build_subscription_url(request, "chain", client="xray"), "singbox": build_subscription_url(request, "chain"), "clash": build_clash_subscription_url(request, "chain")},
+        "imported": {"v2rayng": build_subscription_url(request, "imported", client="xray"), "singbox": build_subscription_url(request, "imported"), "clash": build_clash_subscription_url(request, "imported")},
     }
     return templates.TemplateResponse(
         request,
@@ -960,7 +963,7 @@ async def nodes_page(request: Request):
             "direct_nodes": direct_nodes,
             "chain_nodes": chain_nodes,
             "import_nodes": import_nodes,
-            "subscription_url": subscription_urls["all"]["v2rayn"],
+            "subscription_url": subscription_urls["all"]["v2rayng"],
             "clash_subscription_url": subscription_urls["all"]["clash"],
             "subscription_urls": subscription_urls,
             "subscription_state": get_subscription_token_state(),
@@ -976,10 +979,10 @@ async def rotate_subscription_token_action(request: Request):
     token_state = rotate_subscription_token()
     new_token = token_state["subscription_token"]
     subscription_urls = {
-        "all": {"v2rayn": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="all")), "clash": str(request.url_for("clash_subscription_feed", token=new_token).include_query_params(scope="all"))},
-        "direct": {"v2rayn": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="direct")), "clash": str(request.url_for("clash_subscription_feed", token=new_token).include_query_params(scope="direct"))},
-        "chain": {"v2rayn": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="chain")), "clash": str(request.url_for("clash_subscription_feed", token=new_token).include_query_params(scope="chain"))},
-        "imported": {"v2rayn": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="imported")), "clash": str(request.url_for("clash_subscription_feed", token=new_token).include_query_params(scope="imported"))},
+        "all": {"v2rayng": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="all", client="xray")), "singbox": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="all")), "clash": str(request.url_for("clash_subscription_feed", token=new_token).include_query_params(scope="all"))},
+        "direct": {"v2rayng": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="direct", client="xray")), "singbox": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="direct")), "clash": str(request.url_for("clash_subscription_feed", token=new_token).include_query_params(scope="direct"))},
+        "chain": {"v2rayng": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="chain", client="xray")), "singbox": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="chain")), "clash": str(request.url_for("clash_subscription_feed", token=new_token).include_query_params(scope="chain"))},
+        "imported": {"v2rayng": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="imported", client="xray")), "singbox": str(request.url_for("subscription_feed", token=new_token).include_query_params(scope="imported")), "clash": str(request.url_for("clash_subscription_feed", token=new_token).include_query_params(scope="imported"))},
     }
     return JSONResponse({
         "ok": True,

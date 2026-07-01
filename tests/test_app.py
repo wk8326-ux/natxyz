@@ -177,7 +177,8 @@ def test_nodes_page_after_login() -> None:
     assert "新建节点" in response.text
     assert "直连节点" in response.text
     assert "链式节点" in response.text
-    assert "复制直连 v2rayN 订阅 URL" in response.text
+    assert "复制直连 v2rayNG 订阅 URL" in response.text
+    assert "复制直连 sing-box / NekoBox 订阅 URL" in response.text
     assert "复制链式 Clash 订阅 URL" in response.text
 
 
