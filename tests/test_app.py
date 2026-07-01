@@ -447,6 +447,28 @@ def test_create_node_rejects_reality_target_with_port() -> None:
     assert "Reality 伪装目标只填域名" in response.text
 
 
+
+def test_remote_executor_error_includes_remote_output(monkeypatch) -> None:
+    from app.deployer import RemoteCommandError, RemoteExecutor
+
+    class Result:
+        returncode = 1
+        stdout = "[stage] before failure\n"
+        stderr = "missing package\n"
+
+    monkeypatch.setattr("app.deployer.resolve_host_for_ssh", lambda host: host)
+    monkeypatch.setattr("app.deployer.subprocess.run", lambda *args, **kwargs: Result())
+
+    executor = RemoteExecutor("node.example.com", 22, "root", "secret")
+    try:
+        executor.run("exit 1")
+    except RemoteCommandError as exc:
+        assert exc.returncode == 1
+        assert "[stage] before failure" in str(exc)
+        assert "missing package" in str(exc)
+    else:
+        raise AssertionError("RemoteCommandError not raised")
+
 def test_deployer_uses_node_custom_reality_target() -> None:
     assert choose_reality_target({"selected_reality_target": "www.example.com"}) == "www.example.com"
     generated_uuid, generated_private_key, _generated_public_key, generated_short_id = generate_reality_materials()

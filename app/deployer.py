@@ -106,6 +106,20 @@ def resolve_host_for_ssh(host: str) -> str:
 
 
 
+class RemoteCommandError(Exception):
+    def __init__(self, returncode: int, args: list[str], output: str):
+        super().__init__(f"remote command exited with status {returncode}")
+        self.returncode = returncode
+        self.args = args
+        self.output = output
+
+    def __str__(self) -> str:
+        output = self.output.strip()
+        if output:
+            return f"remote command exited with status {self.returncode}\n{output}"
+        return f"remote command exited with status {self.returncode}"
+
+
 class RemoteExecutor:
     def __init__(self, host: str, port: int, user: str, password: str):
         self.host = resolve_host_for_ssh(host)
@@ -115,24 +129,25 @@ class RemoteExecutor:
         self.password = password
 
     def run(self, script: str, *, timeout: int = 120) -> str:
+        args = [
+            "sshpass",
+            "-p",
+            self.password,
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "ConnectTimeout=12",
+            "-p",
+            str(self.port),
+            f"{self.user}@{self.host}",
+            "sh",
+            "-s",
+        ]
         proc = subprocess.run(
-            [
-                "sshpass",
-                "-p",
-                self.password,
-                "ssh",
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "ConnectTimeout=12",
-                "-p",
-                str(self.port),
-                f"{self.user}@{self.host}",
-                "sh",
-                "-s",
-            ],
+            args,
             input=script,
             text=True,
             capture_output=True,
@@ -140,7 +155,7 @@ class RemoteExecutor:
         )
         output = (proc.stdout or "") + (proc.stderr or "")
         if proc.returncode != 0:
-            raise subprocess.CalledProcessError(proc.returncode, proc.args, output=output)
+            raise RemoteCommandError(proc.returncode, args, output)
         return output.strip()
 
 
