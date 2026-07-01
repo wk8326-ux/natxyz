@@ -489,7 +489,14 @@ PYEOF
         fi
         sleep 1
         if command -v ss >/dev/null 2>&1; then
-          port_pids=$(ss -ltnp 2>/dev/null | awk '$4 ~ /:{int(node["listen_port"])}$/ {{print $0}}' | sed -En 's/.*pid=([0-9][0-9]*).*/\\1/p' | sort -u)
+          if grep -q '"type": "hysteria2"' {shell_quote(REMOTE_SINGBOX_CONFIG)}; then
+            ss_listen_args='-lunp'
+            ss_check_args='-lun'
+          else
+            ss_listen_args='-ltnp'
+            ss_check_args='-ltn'
+          fi
+          port_pids=$(ss $ss_listen_args 2>/dev/null | awk '$4 ~ /:{int(node["listen_port"])}$/ {{print $0}}' | sed -En 's/.*pid=([0-9][0-9]*).*/\\1/p' | sort -u)
           for pid in $port_pids; do
             cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
             case "$cmdline" in
@@ -499,15 +506,15 @@ PYEOF
                 ;;
               *)
                 echo "ERROR: port {int(node["listen_port"])} is occupied by non-NAT-WebUI process: $pid $cmdline"
-                ss -ltnp 2>/dev/null | awk '$4 ~ /:{int(node["listen_port"])}$/ {{print $0}}' || true
+                ss $ss_listen_args 2>/dev/null | awk '$4 ~ /:{int(node["listen_port"])}$/ {{print $0}}' || true
                 exit 1
                 ;;
             esac
           done
           sleep 1
-          if ss -ltnp 2>/dev/null | awk '$4 ~ /:{int(node["listen_port"])}$/ {{print $0}}' | grep -q .; then
+          if ss $ss_listen_args 2>/dev/null | awk '$4 ~ /:{int(node["listen_port"])}$/ {{print $0}}' | grep -q .; then
             echo 'ERROR: sing-box listen port is still occupied after cleanup'
-            ss -ltnp 2>/dev/null | awk '$4 ~ /:{int(node["listen_port"])}$/ {{print $0}}' || true
+            ss $ss_listen_args 2>/dev/null | awk '$4 ~ /:{int(node["listen_port"])}$/ {{print $0}}' || true
             exit 1
           fi
         else
@@ -553,9 +560,9 @@ PYEOF
           fi
         fi
         if command -v ss >/dev/null 2>&1; then
-          if ! ss -ltn | awk '{{print $4}}' | grep -Eq '(^|:){int(node["listen_port"])}$'; then
+          if ! ss $ss_check_args | awk '{{print $4}}' | grep -Eq '(^|:){int(node["listen_port"])}$'; then
             echo 'ERROR: sing-box is not listening on port {int(node["listen_port"])}'
-            ss -ltnp 2>/dev/null || ss -ltn 2>/dev/null || true
+            ss $ss_listen_args 2>/dev/null || ss $ss_check_args 2>/dev/null || true
             exit 1
           fi
         fi

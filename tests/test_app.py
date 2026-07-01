@@ -446,7 +446,28 @@ def test_create_node_rejects_reality_target_with_port() -> None:
     assert response.status_code == 200
     assert "Reality 伪装目标只填域名" in response.text
 
+def test_hysteria2_remote_script_checks_udp_listener() -> None:
+    from app.deployer import build_remote_script
 
+    node = {
+        "node_id": "node_hy2_remote",
+        "protocol_type": "hysteria2",
+        "ip": "node.example.com",
+        "listen_port": 2444,
+        "agent_token": "agent-token",
+    }
+    script = build_remote_script(
+        node,
+        singbox_config='{"inbounds":[{"type":"hysteria2"}]}',
+        node_meta='{}',
+        agent_script='#!/bin/sh\n',
+        singbox_archive_url="mirror.invalid/sing-box.tar.gz",
+        singbox_archive_name="sing-box.tar.gz",
+    )
+
+    assert "ss_listen_args='-lunp'" in script
+    assert "ss_check_args='-lun'" in script
+    assert "ss -ltn | awk" not in script
 
 def test_remote_executor_error_includes_remote_output(monkeypatch) -> None:
     from app.deployer import RemoteCommandError, RemoteExecutor
