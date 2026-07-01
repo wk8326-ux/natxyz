@@ -10,7 +10,7 @@ Nat xyz 当前主要围绕以下能力构建：
 - 链式节点：`vless_chain`
 - Cloudflare Tunnel 节点：`cf_vless_ws`
 - 导入节点：`imported_vless`
-- 订阅输出：v2rayN / Clash
+- 订阅输出：v2rayNG / sing-box(NekoBox) / Clash
 - 远端部署：通过 SSH 在目标 VPS 上生成 `/etc/sing-box/config.json` 并管理 `sing-box.service`
 - 节点状态：通过 `/agent/report` 主动上报
 
@@ -41,7 +41,7 @@ fscarmen 脚本支持协议很多，包括：
 
 - 在 Nat xyz 中支持更多 sing-box 入站协议。
 - 所有新增协议都能通过 WebUI 创建、编辑、部署、重装、删除。
-- 所有新增协议都能进入订阅输出，至少支持 v2rayN，逐步支持 Clash。
+- 所有新增协议都能进入订阅输出，至少支持 v2rayNG 和 sing-box/NekoBox，逐步支持 Clash。
 - 保留现有 VLESS Reality、链式代理、导入节点、Cloudflare Tunnel 能力。
 - 保持远端部署仍由 Nat xyz 管理，而不是交给外部脚本接管。
 - 支持同一台 VPS 上多个协议节点共存，统一生成一个 sing-box 配置。
@@ -60,7 +60,7 @@ fscarmen 脚本支持协议很多，包括：
 - 第一阶段不做完整 fscarmen 脚本所有功能一比一复刻。
 - 第一阶段不支持自动安装 Cloudflare Argo、WARP 打洞、TCP 优化脚本等外部功能。
 - 第一阶段不做复杂的多用户套餐/计费系统。
-- 第一阶段不做所有客户端格式的完美兼容，只保证主流客户端可导入。
+- 第一阶段不做所有客户端格式的完美兼容，但已针对 Hysteria2 区分 v2rayNG 与 sing-box/NekoBox 订阅。
 - 不保存或展示明文敏感链接到公开文档或 GitHub。
 
 ## 3. 当前架构现状
@@ -140,7 +140,7 @@ fscarmen 脚本支持协议很多，包括：
 问题：
 
 - 多协议后不能只看 `last_vless_link`。
-- v2rayN、Clash 对不同协议字段要求不同。
+- v2rayNG、sing-box/NekoBox、Clash 对不同协议字段要求不同。
 - `scope=direct/chain/imported/all` 仍可保留，但协议类型需要细分。
 
 ## 4. 总体方案
@@ -591,9 +591,9 @@ app/protocols/registry.py
 
 ## 11. 订阅设计
 
-### 11.1 v2rayN 订阅
+### 11.1 v2rayNG 与 sing-box/NekoBox 订阅
 
-优先保证每个节点有一个标准 share link。
+优先保证每个节点有一个标准 share link，同时允许按客户端生成不同参数的订阅链接。
 
 读取规则：
 
@@ -601,6 +601,13 @@ app/protocols/registry.py
 2. 兼容读取 `last_vless_link`。
 3. 按地区和节点名重写 remark。
 4. Base64 打包输出。
+5. `client=xray` 用于 v2rayNG/Xray 兼容订阅；默认订阅用于 sing-box/NekoBox。
+
+Hysteria2 当前兼容策略：
+
+- sing-box / NekoBox 默认订阅保留 `insecure=1`、`pinSHA256`、`pinnedPeerCertSha256`、`verifyPeerCertByName`，兼容已验证可用的 sing-box 内核客户端。
+- v2rayNG 专用订阅使用 `pinSHA256=<证书 DER SHA256>`，移除 `insecure`、`pinnedPeerCertSha256`、`verifyPeerCertByName`。
+- 原因是 v2rayNG 的 Hysteria2 URI 解析只读取 `pinSHA256` 并映射到 Xray 的 `pinnedCA256`，不会读取 `pinnedPeerCertSha256` 或 `verifyPeerCertByName`。
 
 ### 11.2 Clash 订阅
 
@@ -635,7 +642,7 @@ imported
 建议新增可选协议过滤：
 
 ```text
-/sub/{token}/v2rayn?scope=direct&protocol=hysteria2
+/sub/{token}/v2rayn?scope=direct&protocol=hysteria2&client=xray
 /sub/{token}/clash?scope=direct&protocol=tuic_v5
 ```
 
@@ -668,7 +675,7 @@ imported
 
 ## 13. 迁移计划
 
-### Phase 0：设计和测试基线
+### Phase 0：设计和测试基线（已完成）
 
 - 新增本文档。
 - 跑现有测试，确认基线。
@@ -679,7 +686,7 @@ imported
 - 当前功能无变化。
 - `pytest` 通过。
 
-### Phase 1：协议注册框架
+### Phase 1：协议注册框架（已完成）
 
 - 新增 `app/protocols/`。
 - 把现有 VLESS Reality 迁入 handler。
@@ -705,33 +712,39 @@ imported
 - 旧节点不需要手工迁移即可显示和订阅。
 - 新部署 VLESS 同时写新旧字段。
 
-### Phase 3：新增 Hysteria2
+### Phase 3：新增 Hysteria2（已完成）
 
 - 实现 `hysteria2.py` handler。
 - 增加表单 partial。
 - 增加配置生成测试。
 - 增加分享链接测试。
 - 增加部署端口校验。
+- 修复自签证书 SAN 生成，避免客户端报 `legacy Common Name field`。
+- 面板订阅按钮拆分为 v2rayNG、sing-box/NekoBox、Clash。
+- 为 v2rayNG 增加 `client=xray` 专用订阅输出，最终验证 HY2 可用。
 
 验收：
 
 - 能创建 Hysteria2 节点。
 - 能生成 sing-box inbound。
-- 能生成 v2rayN 可导入链接。
+- 能生成 v2rayNG 与 sing-box/NekoBox 可导入链接。
 - 不影响 VLESS Reality。
 
-### Phase 4：新增 TUIC / Trojan / Shadowsocks
+### Phase 4：Hysteria2 + Reality（下一阶段）
 
-按顺序新增：
+目标：
 
-1. Trojan TLS
-2. Shadowsocks 2022
-3. TUIC v5
+- 研究 sing-box / fscarmen 对 Hysteria2 + Reality 或类 Reality 前置伪装方案的实际支持边界。
+- 不凭概念实现，先确认 sing-box 官方配置能力、客户端支持情况和 fscarmen 脚本现有做法。
+- 在不破坏当前 Hysteria2 自签证书 + v2rayNG/NekoBox 可用配置的前提下，新增独立实验模式。
+- 如果 sing-box 原生不支持 HY2 直接叠加 Reality，则改为设计等价替代方案，例如 Hysteria2 + SNI/证书伪装、端口跳跃、Realm/WARP-assisted Realm 或前置转发。
 
 验收：
 
-- 每个协议都有表单、配置生成、链接生成、订阅测试。
-- 同 VPS 多协议配置能合并。
+- 有源码或官方文档依据说明 HY2 + Reality 是否可直接实现。
+- 若可实现：新增配置生成、分享链接、订阅、部署和客户端测试。
+- 若不可直接实现：输出可落地替代方案并保留当前 HY2 稳定链路。
+- 当前 v2rayNG、NekoBox/sing-box、Clash 订阅不退化。
 
 ### Phase 5：订阅和 Clash 完善
 
@@ -765,7 +778,7 @@ imported
 建议新增：
 
 - 创建 Hysteria2 节点 → 查看详情 → 生成部署任务。
-- 创建 Trojan 节点 → 生成 v2rayN 订阅。
+- 创建 Trojan 节点 → 生成 v2rayNG / sing-box 订阅。
 - 同 SSH endpoint 创建 VLESS + Hysteria2 → 合并配置中存在两个 inbound。
 - 删除一个节点后重新部署 → 配置中移除对应 inbound。
 
@@ -780,7 +793,28 @@ imported
 - 实际连接出口正确。
 - agent 状态仍会上报。
 
-## 15. 安全设计
+## 15. 当前实现进度（2026-07-02）
+
+已完成：
+
+- 协议注册框架已落地到 `app/protocols/`。
+- Hysteria2 最小闭环已完成：创建、部署、订阅、Clash 转换、远端校验。
+- Hysteria2 自签证书已改为带 SAN，默认 SNI/CN/SAN 为 `www.nvidia.com`。
+- NekoBox / sing-box 客户端已验证可用。
+- v2rayNG 客户端已验证可用，关键参数为 `pinSHA256=<证书 DER SHA256>`。
+- 面板 `/nodes` 的订阅按钮已拆分为 v2rayNG、sing-box/NekoBox、Clash，避免不同客户端参数互相污染。
+- 线上与本地测试均保持通过，当前基线为 `42 passed`。
+
+后续优先级：
+
+1. 第一阶段暂时收尾，冻结当前 Hysteria2 可用基线。
+2. 下一阶段优先研究并实现 `Hysteria2 + Reality` 或经验证的等价替代方案。
+3. 在动手前先查 sing-box 官方配置、fscarmen 脚本实现和主流客户端支持，避免凭概念硬做。
+4. 保持 Hysteria2 不作为链式后端，先稳定直连协议。
+5. Trojan TLS、Shadowsocks 2022、TUIC v5 后移到 HY2 + Reality 方案之后。
+6. 数据库通用字段仍建议后移，避免在协议扩展早期破坏现有线上数据。
+
+## 16. 安全设计
 
 ### 15.1 不执行远程一键脚本
 
@@ -830,7 +864,7 @@ bash <(wget ...)
 - UDP 协议要明确提示需要放行 UDP。
 - 删除节点时不要误删其他节点正在使用的端口。
 
-## 16. 风险清单
+## 17. 风险清单
 
 ### 高风险
 
@@ -852,7 +886,7 @@ bash <(wget ...)
 - 协议显示名称、图标、说明文案不完善。
 - 高级字段默认值需要多轮调优。
 
-## 17. 验收标准
+## 18. 验收标准
 
 第一阶段总体验收：
 
@@ -868,11 +902,11 @@ bash <(wget ...)
 - 支持至少 5 种直连协议：VLESS Reality、Hysteria2、TUIC、Trojan、Shadowsocks。
 - 同一 VPS 可以部署多个不同协议节点。
 - 每个节点详情页显示协议、端口、状态、订阅支持情况。
-- v2rayN 订阅包含所有支持协议。
+- v2rayNG / sing-box 订阅包含所有支持协议。
 - Clash 订阅至少支持 VLESS Reality、Trojan、Shadowsocks，其他协议明确标注支持状态。
 - 远端部署失败可回滚，不影响旧节点运行。
 
-## 18. 推荐实施顺序
+## 19. 推荐实施顺序
 
 最推荐的实际开发顺序：
 
@@ -880,14 +914,15 @@ bash <(wget ...)
 2. 新增协议注册框架，但不改变行为。
 3. 把 VLESS Reality 迁到 handler，跑全量测试。
 4. 添加 `share_link` 和 JSON 参数字段，保持兼容。
-5. 新增 Hysteria2，完成最小闭环。
-6. 新增 Trojan。
-7. 新增 Shadowsocks。
-8. 新增 TUIC。
-9. 完善 Clash 订阅。
-10. 再考虑链式后端支持更多协议。
+5. 新增 Hysteria2，完成最小闭环。（已完成）
+6. 研究并实现 Hysteria2 + Reality 或可验证替代方案。（下一阶段）
+7. 新增 Trojan。
+8. 新增 Shadowsocks。
+9. 新增 TUIC。
+10. 完善 Clash 订阅。
+11. 再考虑链式后端支持更多协议。
 
-## 19. 与 fscarmen 脚本的关系
+## 20. 与 fscarmen 脚本的关系
 
 可以参考：
 
@@ -905,8 +940,8 @@ bash <(wget ...)
 - 不可控的系统级全量卸载逻辑。
 - 与 Nat xyz 数据库无关的订阅模板体系。
 
-## 20. 结论
+## 21. 结论
 
 Nat xyz 可以融合 fscarmen/sing-box.sh 的多协议能力，但应采用“协议 handler + 通用节点参数 + 多协议配置生成 + 订阅转换”的产品化路线，而不是直接把一键脚本嵌入 WebUI。
 
-第一阶段最合理目标是：在不破坏现有 VLESS Reality 和链式代理的前提下，先完成 Hysteria2 的端到端闭环。完成后再复制同一架构扩展 Trojan、Shadowsocks、TUIC。这样风险最低，也最容易测试和回滚。
+第一阶段 Hysteria2 端到端闭环已经完成，并已验证 v2rayNG 与 NekoBox/sing-box 两类客户端。后续应在不破坏现有 VLESS Reality、Hysteria2 和链式代理的前提下，优先研究 Hysteria2 + Reality 或可验证替代方案，再复制同一架构扩展 Trojan、Shadowsocks、TUIC。这样风险最低，也最容易测试和回滚。
