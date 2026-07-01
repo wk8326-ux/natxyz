@@ -9,8 +9,8 @@ from .models import ProtocolBuildContext
 from .registry import register_protocol
 
 
-def _pin_sha256_for_uri(pin: str) -> str:
-    value = str(pin or "").strip()
+def _normalize_hex_sha256(value: str) -> str:
+    value = str(value or "").strip()
     if not value:
         return ""
     compact = value.replace(":", "").lower()
@@ -23,6 +23,10 @@ def _pin_sha256_for_uri(pin: str) -> str:
     if len(decoded) == 32:
         return decoded.hex()
     return value
+
+
+def _pin_sha256_for_uri(pin: str) -> str:
+    return _normalize_hex_sha256(pin)
 
 
 class Hysteria2Protocol:
@@ -67,6 +71,7 @@ class Hysteria2Protocol:
         server_name = str(context.materials.get("selected_reality_target") or "www.example.com").strip() or "www.example.com"
         remark = urllib.parse.quote(str(context.materials.get("remark") or node.get("name") or "Hysteria2"), safe="")
         certificate_pin = str(context.materials.get("certificate_public_key_sha256") or "").strip()
+        peer_cert_pin = str(context.materials.get("certificate_sha256") or certificate_pin).strip()
         query_params = {
             "sni": server_name,
             "obfs": "none",
@@ -75,8 +80,9 @@ class Hysteria2Protocol:
         }
         if certificate_pin:
             pin_hex = _pin_sha256_for_uri(certificate_pin)
+            peer_cert_hex = _normalize_hex_sha256(peer_cert_pin)
             query_params["pinSHA256"] = pin_hex
-            query_params["pinnedPeerCertSha256"] = pin_hex
+            query_params["pinnedPeerCertSha256"] = peer_cert_hex or pin_hex
         else:
             query_params["insecure"] = "1"
         query = urllib.parse.urlencode(query_params)

@@ -870,10 +870,15 @@ def run_multi_real_deploy(nodes: list[dict]) -> DeployResult:
             try:
                 certificate_output = executor.run("openssl x509 -in /etc/sing-box/hysteria2-cert.pem -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | base64", timeout=25)
                 certificate_pin = next((line.strip() for line in certificate_output.splitlines() if line.strip() and not line.startswith("Warning:")), "")
+                certificate_sha_output = executor.run("openssl x509 -in /etc/sing-box/hysteria2-cert.pem -outform DER 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | base64", timeout=25)
+                certificate_sha256 = next((line.strip() for line in certificate_sha_output.splitlines() if line.strip() and not line.startswith("Warning:")), "")
             except Exception:
                 certificate_pin = ""
+                certificate_sha256 = ""
             context.materials["certificate_public_key_sha256"] = certificate_pin
+            context.materials["certificate_sha256"] = certificate_sha256
             entry["certificate_public_key_sha256"] = certificate_pin
+            entry["certificate_sha256"] = certificate_sha256
             entry["generated_public_key"] = certificate_pin or entry.get("generated_public_key") or ""
             sync_remote_certificate_pin(executor, str(node["node_id"]), certificate_pin)
         generated_vless_link = handler.build_share_link(context) if handler else build_vless_link(
@@ -1023,9 +1028,13 @@ def run_real_deploy(node: dict) -> DeployResult:
             try:
                 certificate_output = executor.run("openssl x509 -in /etc/sing-box/hysteria2-cert.pem -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | base64", timeout=25)
                 certificate_pin = next((line.strip() for line in certificate_output.splitlines() if line.strip() and not line.startswith("Warning:")), "")
+                certificate_sha_output = executor.run("openssl x509 -in /etc/sing-box/hysteria2-cert.pem -outform DER 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | base64", timeout=25)
+                certificate_sha256 = next((line.strip() for line in certificate_sha_output.splitlines() if line.strip() and not line.startswith("Warning:")), "")
             except Exception:
                 certificate_pin = ""
+                certificate_sha256 = ""
             context.materials["certificate_public_key_sha256"] = certificate_pin
+            context.materials["certificate_sha256"] = certificate_sha256
             generated_public_key = certificate_pin or generated_public_key
             sync_remote_certificate_pin(executor, str(node["node_id"]), certificate_pin)
         generated_vless_link = handler.build_share_link(context) if handler else build_vless_link(

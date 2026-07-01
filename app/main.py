@@ -799,7 +799,7 @@ def _hysteria2_link_to_clash_proxy(link: str) -> dict[str, object] | None:
     query = urllib.parse.parse_qs(parsed.query)
     name = urllib.parse.unquote(parsed.fragment or parsed.hostname)
     peer = _query_first(query, "sni") or _query_first(query, "peer")
-    pin_sha256 = _query_first(query, "pinnedPeerCertSha256") or _query_first(query, "pinSHA256")
+    pin_sha256 = _query_first(query, "pinSHA256") or _query_first(query, "pinnedPeerCertSha256")
     proxy: dict[str, object] = {
         "name": name,
         "type": "hysteria2",
