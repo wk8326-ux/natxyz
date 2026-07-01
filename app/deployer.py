@@ -525,8 +525,23 @@ else:
 PYEOF_HY2
 )
           cert_subject=$(openssl x509 -in /etc/sing-box/hysteria2-cert.pem -noout -subject 2>/dev/null || true)
-          if [ ! -s /etc/sing-box/hysteria2-cert.pem ] || [ ! -s /etc/sing-box/hysteria2-key.pem ] || ! printf '%s' "$cert_subject" | grep -Fq "CN = $hy2_server_name"; then
-            openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/sing-box/hysteria2-key.pem -out /etc/sing-box/hysteria2-cert.pem -days 3650 -subj "/CN=$hy2_server_name" >/dev/null 2>&1
+          cert_san=$(openssl x509 -in /etc/sing-box/hysteria2-cert.pem -noout -ext subjectAltName 2>/dev/null || true)
+          if [ ! -s /etc/sing-box/hysteria2-cert.pem ] || [ ! -s /etc/sing-box/hysteria2-key.pem ] || ! printf '%s' "$cert_subject" | grep -Fq "CN = $hy2_server_name" || ! printf '%s' "$cert_san" | grep -Fq "DNS:$hy2_server_name"; then
+            if openssl req -help 2>&1 | grep -q -- '-addext'; then
+              openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/sing-box/hysteria2-key.pem -out /etc/sing-box/hysteria2-cert.pem -days 3650 -subj "/CN=$hy2_server_name" -addext "subjectAltName = DNS:$hy2_server_name" >/dev/null 2>&1
+            else
+              cat > /tmp/hysteria2-openssl.cnf <<EOF_HY2_CERT
+[req]
+distinguished_name=req_distinguished_name
+x509_extensions=v3_req
+prompt=no
+[req_distinguished_name]
+CN=$hy2_server_name
+[v3_req]
+subjectAltName=DNS:$hy2_server_name
+EOF_HY2_CERT
+              openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/sing-box/hysteria2-key.pem -out /etc/sing-box/hysteria2-cert.pem -days 3650 -config /tmp/hysteria2-openssl.cnf >/dev/null 2>&1
+            fi
             chmod 600 /etc/sing-box/hysteria2-key.pem
           fi
         fi
