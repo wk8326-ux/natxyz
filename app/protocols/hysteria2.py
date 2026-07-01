@@ -48,6 +48,7 @@ class Hysteria2Protocol:
         remark = urllib.parse.quote(str(context.materials.get("remark") or node.get("name") or "Hysteria2"), safe="")
         query = urllib.parse.urlencode(
             {
+                "sni": server_name,
                 "peer": server_name,
                 "insecure": "1",
                 "obfs": "none",

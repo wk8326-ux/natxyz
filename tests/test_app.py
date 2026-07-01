@@ -104,6 +104,7 @@ def test_hysteria2_handler_builds_inbound_and_share_link() -> None:
     assert inbound["tls"]["key_path"] == "/etc/sing-box/hysteria2-key.pem"
     link = handler.build_share_link(context)
     assert link.startswith("hysteria2://hy2-password@node.example.com:2443?")
+    assert "sni=www.example.com" in link
     assert "peer=www.example.com" in link
     assert "insecure=1" in link
     assert "obfs=none" in link
@@ -1184,7 +1185,7 @@ def test_create_hysteria2_node_and_subscription_payload() -> None:
     with get_conn() as conn:
         conn.execute(
             "UPDATE nodes SET last_vless_link = ?, generated_uuid = ? WHERE node_id = ?",
-            ("hysteria2://hy2-password@node.example.com:24443?peer=www.example.com&insecure=1&obfs=none&upmbps=100&downmbps=100#HY2_CREATE_NODE", "hy2-password", node["node_id"]),
+            ("hysteria2://hy2-password@node.example.com:24443?sni=www.example.com&peer=www.example.com&insecure=1&obfs=none&upmbps=100&downmbps=100#HY2_CREATE_NODE", "hy2-password", node["node_id"]),
         )
 
     payload = build_subscription_payload("direct")
