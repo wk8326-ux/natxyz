@@ -16,11 +16,47 @@ from app.deployer import DeployedNodeResult, DeployResult, build_remote_script, 
 from app.db import create_deployment_record, create_node_record, get_deployment, get_node, init_db, list_chain_backend_nodes, list_direct_vless_nodes, list_nodes, mark_deployment_failed, set_node_generated_fields
 from app.main import app, build_subscription_payload, display_vless_link_for_node
 from app.link_labels import replace_vless_fragment, vless_remark_for_node
+from app.protocols.registry import get_protocol, list_protocols
 
 init_db()
 
 
 client = TestClient(app)
+
+
+def test_protocol_registry_contains_vless_reality_handler() -> None:
+    handler = get_protocol("vless_reality_singbox")
+    assert handler is not None
+    assert handler.display_name == "VLESS Reality"
+    assert handler.supports_deploy is True
+    assert handler.supports_subscription is True
+    assert handler.supports_chain_backend is True
+    assert get_protocol("vless_reality") is handler
+    assert handler in list_protocols()
+
+
+def test_build_singbox_config_uses_protocol_registry_for_vless_reality() -> None:
+    node = {
+        "node_id": "node_registry",
+        "protocol_type": "vless_reality_singbox",
+        "listen_port": 2443,
+    }
+    config = json.loads(
+        build_singbox_config(
+            node,
+            generated_uuid="11111111-1111-1111-1111-111111111111",
+            generated_private_key="private-key",
+            generated_short_id="abcd1234",
+            selected_reality_target="www.example.com",
+        )
+    )
+    inbound = config["inbounds"][0]
+    assert inbound["type"] == "vless"
+    assert inbound["tag"] == "vless-reality-node_registry"
+    assert inbound["listen_port"] == 2443
+    assert inbound["users"] == [{"uuid": "11111111-1111-1111-1111-111111111111", "flow": "xtls-rprx-vision"}]
+    assert inbound["tls"]["server_name"] == "www.example.com"
+    assert inbound["tls"]["reality"]["short_id"] == ["abcd1234"]
 
 
 def login() -> None:

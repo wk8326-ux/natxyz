@@ -17,6 +17,9 @@ from typing import Any
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 from .config import AGENT_REPORT_PATH, APP_DIR, PUBLIC_BASE_URL
+from .protocols.models import ProtocolBuildContext
+from .protocols.registry import get_protocol
+from .protocols.vless_reality import VlessRealityProtocol  # noqa: F401 - register protocol
 from .regions import replace_vless_fragment, vless_remark_for_node
 
 REMOTE_APP_DIR = "/opt/natctl"
@@ -208,30 +211,17 @@ def build_multi_singbox_config(entries: list[dict[str, Any]]) -> str:
     inbounds = []
     for entry in entries:
         node = entry["node"]
-        selected_reality_target = entry["selected_reality_target"]
-        node_id = str(node.get("node_id") or "node")
-        inbounds.append(
-            {
-                "type": "vless",
-                "tag": f"vless-reality-{node_id}",
-                "listen": "::",
-                "listen_port": int(node["listen_port"]),
-                "users": [{"uuid": entry["generated_uuid"], "flow": "xtls-rprx-vision"}],
-                "tls": {
-                    "enabled": True,
-                    "server_name": selected_reality_target,
-                    "reality": {
-                        "enabled": True,
-                        "handshake": {
-                            "server": selected_reality_target,
-                            "server_port": 443,
-                        },
-                        "private_key": entry["generated_private_key"],
-                        "short_id": [entry["generated_short_id"]],
-                    },
-                },
-            }
-        )
+        protocol_type = str(node.get("protocol_type") or "vless_reality_singbox")
+        handler = get_protocol(protocol_type)
+        if handler is None or not handler.supports_deploy:
+            raise DeployError("config", f"unsupported deploy protocol: {protocol_type}", f"unsupported deploy protocol: {protocol_type}")
+        materials = {
+            "generated_uuid": entry["generated_uuid"],
+            "generated_private_key": entry["generated_private_key"],
+            "generated_short_id": entry["generated_short_id"],
+            "selected_reality_target": entry["selected_reality_target"],
+        }
+        inbounds.append(handler.build_inbound(ProtocolBuildContext(node=node, materials=materials)))
     config = {"log": {"level": "info"}, "inbounds": inbounds, "outbounds": [{"type": "direct", "tag": "direct"}]}
     return json.dumps(config, ensure_ascii=False, indent=2)
 
