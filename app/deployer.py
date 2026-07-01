@@ -337,22 +337,45 @@ def build_multi_node_meta(entries: list[dict[str, Any]]) -> str:
     nodes = []
     for entry in entries:
         node = entry["node"]
-        nodes.append(
-            {
-                "node_id": node["node_id"],
-                "protocol_type": node["protocol_type"],
-                "public_port": node["public_port"],
-                "listen_port": node["listen_port"],
-                "selected_reality_target": entry["selected_reality_target"],
-                "generated_uuid": entry["generated_uuid"],
-                "generated_public_key": entry.get("generated_public_key") or "",
-                "generated_short_id": entry.get("generated_short_id") or "",
-                "agent_token": node["agent_token"],
-            }
-        )
+        meta = {
+            "node_id": node["node_id"],
+            "protocol_type": node["protocol_type"],
+            "public_port": node["public_port"],
+            "listen_port": node["listen_port"],
+            "selected_reality_target": entry["selected_reality_target"],
+            "generated_uuid": entry["generated_uuid"],
+            "generated_public_key": entry.get("generated_public_key") or "",
+            "generated_short_id": entry.get("generated_short_id") or "",
+            "agent_token": node["agent_token"],
+        }
+        certificate_pin = str(entry.get("certificate_public_key_sha256") or "").strip()
+        if certificate_pin:
+            meta["certificate_public_key_sha256"] = certificate_pin
+        nodes.append(meta)
     payload = nodes[0].copy()
     payload["nodes"] = nodes
     return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def sync_remote_certificate_pin(executor: RemoteExecutor, node_id: str, certificate_pin: str) -> None:
+    if not certificate_pin:
+        return
+    script = f"""python3 - <<'PYEOF'
+import json
+from pathlib import Path
+meta_path = Path({REMOTE_META_FILE!r})
+meta = json.loads(meta_path.read_text())
+nodes = meta.get('nodes') or [meta]
+for item in nodes:
+    if item.get('node_id') == {node_id!r}:
+        item['generated_public_key'] = {certificate_pin!r}
+        item['certificate_public_key_sha256'] = {certificate_pin!r}
+if meta.get('node_id') == {node_id!r}:
+    meta['generated_public_key'] = {certificate_pin!r}
+    meta['certificate_public_key_sha256'] = {certificate_pin!r}
+meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + '\\n')
+PYEOF"""
+    executor.run(script, timeout=25)
 
 
 def build_agent_script(node: dict) -> str:
@@ -394,6 +417,7 @@ for item in nodes:
         "protocol_type": item.get("protocol_type"),
         "generated_uuid": item.get("generated_uuid"),
         "generated_public_key": item.get("generated_public_key"),
+        "certificate_public_key_sha256": item.get("certificate_public_key_sha256"),
         "generated_short_id": item.get("generated_short_id"),
         "selected_reality_target": item.get("selected_reality_target"),
     }}
@@ -836,10 +860,22 @@ def run_multi_real_deploy(nodes: list[dict]) -> DeployResult:
                 "generated_uuid": entry["generated_uuid"],
                 "generated_public_key": entry.get("generated_public_key") or "",
                 "generated_short_id": entry.get("generated_short_id") or "",
+                "certificate_public_key_sha256": entry.get("certificate_public_key_sha256") or "",
                 "selected_reality_target": entry["selected_reality_target"],
                 "remark": vless_remark_for_node(node, allow_lookup=True),
             },
         )
+        protocol_type = str(node.get("protocol_type") or "vless_reality_singbox")
+        if handler and protocol_type == "hysteria2":
+            try:
+                certificate_output = executor.run("openssl x509 -in /etc/sing-box/hysteria2-cert.pem -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | base64", timeout=25)
+                certificate_pin = next((line.strip() for line in certificate_output.splitlines() if line.strip() and not line.startswith("Warning:")), "")
+            except Exception:
+                certificate_pin = ""
+            context.materials["certificate_public_key_sha256"] = certificate_pin
+            entry["certificate_public_key_sha256"] = certificate_pin
+            entry["generated_public_key"] = certificate_pin or entry.get("generated_public_key") or ""
+            sync_remote_certificate_pin(executor, str(node["node_id"]), certificate_pin)
         generated_vless_link = handler.build_share_link(context) if handler else build_vless_link(
             node,
             generated_uuid=entry["generated_uuid"],
@@ -853,7 +889,7 @@ def run_multi_real_deploy(nodes: list[dict]) -> DeployResult:
                 generated_vless_link=generated_vless_link,
                 generated_uuid=entry["generated_uuid"],
                 generated_private_key=entry["generated_private_key"],
-                generated_public_key=entry["generated_public_key"],
+                generated_public_key=entry.get("generated_public_key") or "",
                 generated_short_id=entry["generated_short_id"],
                 selected_reality_target=entry["selected_reality_target"],
             )
@@ -983,6 +1019,15 @@ def run_real_deploy(node: dict) -> DeployResult:
                 "remark": vless_remark_for_node(node, allow_lookup=True),
             },
         )
+        if handler and protocol_type == "hysteria2":
+            try:
+                certificate_output = executor.run("openssl x509 -in /etc/sing-box/hysteria2-cert.pem -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | base64", timeout=25)
+                certificate_pin = next((line.strip() for line in certificate_output.splitlines() if line.strip() and not line.startswith("Warning:")), "")
+            except Exception:
+                certificate_pin = ""
+            context.materials["certificate_public_key_sha256"] = certificate_pin
+            generated_public_key = certificate_pin or generated_public_key
+            sync_remote_certificate_pin(executor, str(node["node_id"]), certificate_pin)
         generated_vless_link = handler.build_share_link(context) if handler else build_vless_link(
             node,
             generated_uuid=generated_uuid,

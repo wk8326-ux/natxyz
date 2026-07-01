@@ -787,7 +787,8 @@ def _hysteria2_link_to_clash_proxy(link: str) -> dict[str, object] | None:
         return None
     query = urllib.parse.parse_qs(parsed.query)
     name = urllib.parse.unquote(parsed.fragment or parsed.hostname)
-    peer = _query_first(query, "peer") or _query_first(query, "sni")
+    peer = _query_first(query, "sni") or _query_first(query, "peer")
+    pin_sha256 = _query_first(query, "pinSHA256")
     proxy: dict[str, object] = {
         "name": name,
         "type": "hysteria2",
@@ -795,10 +796,12 @@ def _hysteria2_link_to_clash_proxy(link: str) -> dict[str, object] | None:
         "port": parsed.port or 443,
         "password": urllib.parse.unquote(parsed.username),
         "sni": peer,
-        "skip-cert-verify": _query_first(query, "insecure") in {"1", "true", "True"},
-        "up": f"{_query_first(query, 'upmbps', '100')} Mbps",
-        "down": f"{_query_first(query, 'downmbps', '100')} Mbps",
+        "skip-cert-verify": _query_first(query, "insecure") in {"1", "true", "True"} and not pin_sha256,
+        "up": f"{_query_first(query, 'upmbps', '200')} Mbps",
+        "down": f"{_query_first(query, 'downmbps', '1000')} Mbps",
     }
+    if pin_sha256:
+        proxy["certificate-public-key-sha256"] = pin_sha256
     obfs = _query_first(query, "obfs")
     if obfs and obfs != "none":
         proxy["obfs"] = obfs

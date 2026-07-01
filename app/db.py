@@ -967,7 +967,7 @@ def set_node_generated_fields(
 
 def mark_node_deployed_from_report(node_id: str, payload: dict[str, Any]) -> None:
     generated_uuid = str(payload.get("generated_uuid") or "").strip()
-    generated_public_key = str(payload.get("generated_public_key") or "").strip()
+    generated_public_key = str(payload.get("certificate_public_key_sha256") or payload.get("generated_public_key") or "").strip()
     generated_short_id = str(payload.get("generated_short_id") or "").strip()
     selected_reality_target = str(payload.get("selected_reality_target") or "").strip()
     public_ip = str(payload.get("public_ip") or "").strip()
@@ -991,12 +991,23 @@ def mark_node_deployed_from_report(node_id: str, payload: dict[str, Any]) -> Non
         if not selected_reality_target:
             selected_reality_target = "www.example.com"
         if not last_vless_link:
-            last_vless_link = (
-                f"vless://{generated_uuid}@{public_ip}:{public_port}"
-                f"?security=reality&sni={selected_reality_target}"
-                f"&pbk={generated_public_key}&sid={generated_short_id}"
-                f"&type=tcp&flow=xtls-rprx-vision#{node_name}"
-            )
+            if str(payload.get("protocol_type") or "") == "hysteria2":
+                from urllib.parse import quote, urlencode
+                query = urlencode({
+                    "sni": selected_reality_target,
+                    "obfs": "none",
+                    "upmbps": "200",
+                    "downmbps": "1000",
+                    "pinSHA256": generated_public_key,
+                })
+                last_vless_link = f"hysteria2://{generated_uuid}@{public_ip}:{public_port}?{query}#{quote(node_name, safe='')}"
+            else:
+                last_vless_link = (
+                    f"vless://{generated_uuid}@{public_ip}:{public_port}"
+                    f"?security=reality&sni={selected_reality_target}"
+                    f"&pbk={generated_public_key}&sid={generated_short_id}"
+                    f"&type=tcp&flow=xtls-rprx-vision#{node_name}"
+                )
         conn.execute(
             """
             UPDATE nodes

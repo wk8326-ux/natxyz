@@ -87,6 +87,7 @@ def test_hysteria2_handler_builds_inbound_and_share_link() -> None:
         materials={
             "generated_uuid": "hy2-password",
             "selected_reality_target": "www.example.com",
+            "certificate_public_key_sha256": "pin-value",
             "remark": "HY2_NODE",
         },
     )
@@ -105,11 +106,11 @@ def test_hysteria2_handler_builds_inbound_and_share_link() -> None:
     link = handler.build_share_link(context)
     assert link.startswith("hysteria2://hy2-password@node.example.com:2443?")
     assert "sni=www.example.com" in link
-    assert "peer=www.example.com" in link
-    assert "insecure=1" in link
+    assert "pinSHA256=pin-value" in link
+    assert "insecure=1" not in link
     assert "obfs=none" in link
-    assert "upmbps=100" in link
-    assert "downmbps=100" in link
+    assert "upmbps=200" in link
+    assert "downmbps=1000" in link
     assert link.endswith("#HY2_NODE")
 
 
@@ -1196,7 +1197,7 @@ def test_create_hysteria2_node_and_subscription_payload() -> None:
     with get_conn() as conn:
         conn.execute(
             "UPDATE nodes SET last_vless_link = ?, generated_uuid = ? WHERE node_id = ?",
-            ("hysteria2://hy2-password@node.example.com:24443?sni=www.example.com&peer=www.example.com&insecure=1&obfs=none&upmbps=100&downmbps=100#HY2_CREATE_NODE", "hy2-password", node["node_id"]),
+            ("hysteria2://hy2-password@node.example.com:24443?sni=www.example.com&pinSHA256=pin-value&obfs=none&upmbps=200&downmbps=1000#HY2_CREATE_NODE", "hy2-password", node["node_id"]),
         )
 
     payload = build_subscription_payload("direct")
@@ -1205,6 +1206,6 @@ def test_create_hysteria2_node_and_subscription_payload() -> None:
 
     clash_payload = build_clash_subscription_payload("direct")
     assert "type: hysteria2" in clash_payload
-    assert "skip-cert-verify: true" in clash_payload
-    assert "up: 100 Mbps" in clash_payload
-    assert "down: 100 Mbps" in clash_payload
+    assert "skip-cert-verify: false" in clash_payload
+    assert "up: 200 Mbps" in clash_payload
+    assert "down: 1000 Mbps" in clash_payload

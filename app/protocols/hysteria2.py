@@ -27,6 +27,8 @@ class Hysteria2Protocol:
             "listen": "::",
             "listen_port": int(node["listen_port"]),
             "users": [{"password": password}],
+            "up_mbps": 200,
+            "down_mbps": 1000,
             "ignore_client_bandwidth": False,
             "tls": {
                 "enabled": True,
@@ -46,16 +48,18 @@ class Hysteria2Protocol:
         port = int(node.get("public_port") or node.get("listen_port") or 443)
         server_name = str(context.materials.get("selected_reality_target") or "www.example.com").strip() or "www.example.com"
         remark = urllib.parse.quote(str(context.materials.get("remark") or node.get("name") or "Hysteria2"), safe="")
-        query = urllib.parse.urlencode(
-            {
-                "sni": server_name,
-                "peer": server_name,
-                "insecure": "1",
-                "obfs": "none",
-                "upmbps": "100",
-                "downmbps": "100",
-            }
-        )
+        certificate_pin = str(context.materials.get("certificate_public_key_sha256") or "").strip()
+        query_params = {
+            "sni": server_name,
+            "obfs": "none",
+            "upmbps": "200",
+            "downmbps": "1000",
+        }
+        if certificate_pin:
+            query_params["pinSHA256"] = certificate_pin
+        else:
+            query_params["insecure"] = "1"
+        query = urllib.parse.urlencode(query_params)
         return f"hysteria2://{password}@{host}:{port}?{query}#{remark}"
 
 
