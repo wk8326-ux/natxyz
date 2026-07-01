@@ -109,6 +109,7 @@ def test_hysteria2_handler_builds_inbound_and_share_link() -> None:
     assert "sni=www.example.com" in link
     assert "pinSHA256=5654bb70e12df9fe4d1249d8b7a9f93ed55dbbe07a794ad087a1f3fe9589deeb" in link
     assert "pinnedPeerCertSha256=b2c0a1d9a3d4e5f67890123456789abcdef0123456789abcdef0123456789ab" in link
+    assert "verifyPeerCertByName=www.example.com" in link
     assert "insecure=1" not in link
     assert "obfs=none" in link
     assert "upmbps=200" in link
@@ -1199,7 +1200,7 @@ def test_create_hysteria2_node_and_subscription_payload() -> None:
     with get_conn() as conn:
         conn.execute(
             "UPDATE nodes SET last_vless_link = ?, generated_uuid = ? WHERE node_id = ?",
-            ("hysteria2://hy2-password@node.example.com:24443?sni=www.example.com&pinSHA256=5654bb70e12df9fe4d1249d8b7a9f93ed55dbbe07a794ad087a1f3fe9589deeb&pinnedPeerCertSha256=b2c0a1d9a3d4e5f67890123456789abcdef0123456789abcdef0123456789ab&obfs=none&upmbps=200&downmbps=1000#HY2_CREATE_NODE", "hy2-password", node["node_id"]),
+            ("hysteria2://hy2-password@node.example.com:24443?sni=www.example.com&pinSHA256=5654bb70e12df9fe4d1249d8b7a9f93ed55dbbe07a794ad087a1f3fe9589deeb&pinnedPeerCertSha256=b2c0a1d9a3d4e5f67890123456789abcdef0123456789abcdef0123456789ab&verifyPeerCertByName=www.example.com&obfs=none&upmbps=200&downmbps=1000#HY2_CREATE_NODE", "hy2-password", node["node_id"]),
         )
 
     payload = build_subscription_payload("direct")
