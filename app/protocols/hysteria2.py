@@ -75,6 +75,7 @@ class Hysteria2Protocol:
         }
         if certificate_pin:
             query_params["pinSHA256"] = _pin_sha256_for_uri(certificate_pin)
+            query_params["insecure"] = "1"
         else:
             query_params["insecure"] = "1"
         query = urllib.parse.urlencode(query_params)

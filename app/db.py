@@ -1007,6 +1007,7 @@ def mark_node_deployed_from_report(node_id: str, payload: dict[str, Any]) -> Non
                     "upmbps": "200",
                     "downmbps": "1000",
                     "pinSHA256": pin_for_uri,
+                    "insecure": "1",
                 })
                 last_vless_link = f"hysteria2://{generated_uuid}@{public_ip}:{public_port}?{query}#{quote(node_name, safe='')}"
             else:

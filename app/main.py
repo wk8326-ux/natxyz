@@ -807,7 +807,7 @@ def _hysteria2_link_to_clash_proxy(link: str) -> dict[str, object] | None:
         "port": parsed.port or 443,
         "password": urllib.parse.unquote(parsed.username),
         "sni": peer,
-        "skip-cert-verify": _query_first(query, "insecure") in {"1", "true", "True"} and not pin_sha256,
+        "skip-cert-verify": _query_first(query, "insecure") in {"1", "true", "True"},
         "up": f"{_query_first(query, 'upmbps', '200')} Mbps",
         "down": f"{_query_first(query, 'downmbps', '1000')} Mbps",
     }
