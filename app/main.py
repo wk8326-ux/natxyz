@@ -729,18 +729,20 @@ def display_vless_link_for_node(node: sqlite3.Row | dict[str, object], node_by_i
     return vless_link_with_node_remark(str(node["last_vless_link"] or ""), node, region_source_node=region_source_node)
 
 def _hysteria2_link_for_client(link: str, client: str) -> str:
-    if not link.startswith("hysteria2://") or client != "xray":
+    if not link.startswith("hysteria2://"):
         return link
     parsed = urllib.parse.urlparse(link)
     query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-    query.pop("insecure", None)
+    if client == "xray":
+        query["insecure"] = ["1"]
+    else:
+        return link
     ordered = {}
     for key in [
         "sni",
         "peer",
         "pinSHA256",
-        "pinnedPeerCertSha256",
-        "verifyPeerCertByName",
+        "insecure",
         "obfs",
         "upmbps",
         "downmbps",
@@ -748,7 +750,7 @@ def _hysteria2_link_for_client(link: str, client: str) -> str:
         if key in query:
             ordered[key] = query[key][-1]
     for key, values in query.items():
-        if key not in ordered:
+        if key not in ordered and key not in {"pinnedPeerCertSha256", "verifyPeerCertByName"}:
             ordered[key] = values[-1]
     return urllib.parse.urlunparse((
         parsed.scheme,
