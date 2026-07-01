@@ -101,6 +101,7 @@ def test_hysteria2_handler_builds_inbound_and_share_link() -> None:
     link = handler.build_share_link(context)
     assert link.startswith("hy2://hy2-password@node.example.com:2443?")
     assert "sni=www.example.com" in link
+    assert "insecure=1" in link
     assert link.endswith("#HY2_NODE")
 
 

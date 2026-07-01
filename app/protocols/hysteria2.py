@@ -42,7 +42,7 @@ class Hysteria2Protocol:
         port = int(node.get("public_port") or node.get("listen_port") or 443)
         server_name = str(context.materials.get("selected_reality_target") or "www.example.com").strip() or "www.example.com"
         remark = urllib.parse.quote(str(context.materials.get("remark") or node.get("name") or "Hysteria2"), safe="")
-        query = urllib.parse.urlencode({"sni": server_name})
+        query = urllib.parse.urlencode({"sni": server_name, "insecure": "1"})
         return f"hy2://{password}@{host}:{port}?{query}#{remark}"
 
 
