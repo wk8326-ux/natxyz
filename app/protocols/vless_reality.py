@@ -41,5 +41,19 @@ class VlessRealityProtocol:
             },
         }
 
+    def build_share_link(self, context: ProtocolBuildContext) -> str:
+        from app.regions import vless_remark_for_node
+
+        node = context.node
+        materials = context.materials
+        remark = str(materials.get("remark") or vless_remark_for_node(node, allow_lookup=True))
+        query = (
+            f"encryption=none&flow=xtls-rprx-vision&security=reality"
+            f"&sni={materials['selected_reality_target']}"
+            f"&fp=chrome&pbk={materials['generated_public_key']}"
+            f"&sid={materials['generated_short_id']}&type=tcp&headerType=none"
+        )
+        return f"vless://{materials['generated_uuid']}@{node['ip']}:{node['public_port']}?{query}#{remark}"
+
 
 register_protocol(VlessRealityProtocol())

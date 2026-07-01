@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 from .config import AGENT_REPORT_PATH, APP_DIR, PUBLIC_BASE_URL
 from .protocols.models import ProtocolBuildContext
+from .protocols.hysteria2 import Hysteria2Protocol  # noqa: F401 - register protocol
 from .protocols.registry import get_protocol
 from .protocols.vless_reality import VlessRealityProtocol  # noqa: F401 - register protocol
 from .regions import replace_vless_fragment, vless_remark_for_node
@@ -217,8 +218,8 @@ def build_multi_singbox_config(entries: list[dict[str, Any]]) -> str:
             raise DeployError("config", f"unsupported deploy protocol: {protocol_type}", f"unsupported deploy protocol: {protocol_type}")
         materials = {
             "generated_uuid": entry["generated_uuid"],
-            "generated_private_key": entry["generated_private_key"],
-            "generated_short_id": entry["generated_short_id"],
+            "generated_private_key": entry.get("generated_private_key") or "",
+            "generated_short_id": entry.get("generated_short_id") or "",
             "selected_reality_target": entry["selected_reality_target"],
         }
         inbounds.append(handler.build_inbound(ProtocolBuildContext(node=node, materials=materials)))
@@ -316,8 +317,8 @@ def build_multi_node_meta(entries: list[dict[str, Any]]) -> str:
                 "listen_port": node["listen_port"],
                 "selected_reality_target": entry["selected_reality_target"],
                 "generated_uuid": entry["generated_uuid"],
-                "generated_public_key": entry["generated_public_key"],
-                "generated_short_id": entry["generated_short_id"],
+                "generated_public_key": entry.get("generated_public_key") or "",
+                "generated_short_id": entry.get("generated_short_id") or "",
                 "agent_token": node["agent_token"],
             }
         )
@@ -420,11 +421,11 @@ def build_remote_script(node: dict, *, singbox_config: str, node_meta: str, agen
         set -eu
         mkdir -p {shell_quote(REMOTE_BIN_DIR)} {shell_quote(REMOTE_AGENT_DIR)} {shell_quote(REMOTE_STATE_DIR)} {shell_quote(REMOTE_LOG_DIR)} {shell_quote(REMOTE_SINGBOX_DIR)} /tmp/natctl-singbox /etc/systemd/system
         if command -v apk >/dev/null 2>&1; then
-          apk add --no-cache curl ca-certificates tar gzip python3 coreutils iproute2 >/dev/null
+          apk add --no-cache curl ca-certificates tar gzip python3 coreutils iproute2 openssl >/dev/null
         elif command -v apt-get >/dev/null 2>&1; then
           export DEBIAN_FRONTEND=noninteractive
           apt-get update -y >/dev/null
-          apt-get install -y curl ca-certificates tar gzip python3 coreutils iproute2 cron >/dev/null
+          apt-get install -y curl ca-certificates tar gzip python3 coreutils iproute2 cron openssl >/dev/null
         else
           echo 'ERROR: unsupported package manager'
           exit 1
@@ -454,6 +455,16 @@ Path({REMOTE_AGENT_SCRIPT!r}).write_text({agent_script!r})
 Path('/etc/init.d/sing-box').write_text({openrc_script!r})
 Path('/etc/systemd/system/sing-box.service').write_text({systemd_script!r})
 PYEOF
+        if grep -q '"type": "hysteria2"' {shell_quote(REMOTE_SINGBOX_CONFIG)}; then
+          if ! command -v openssl >/dev/null 2>&1; then
+            echo 'ERROR: openssl unavailable for Hysteria2 self-signed certificate'
+            exit 1
+          fi
+          if [ ! -s /etc/sing-box/hysteria2-cert.pem ] || [ ! -s /etc/sing-box/hysteria2-key.pem ]; then
+            openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/sing-box/hysteria2-key.pem -out /etc/sing-box/hysteria2-cert.pem -days 3650 -subj '/CN=www.example.com' >/dev/null 2>&1
+            chmod 600 /etc/sing-box/hysteria2-key.pem
+          fi
+        fi
         chmod +x {shell_quote(REMOTE_AGENT_SCRIPT)} /etc/init.d/sing-box
         if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
           systemctl stop sing-box >/dev/null 2>&1 || true
@@ -770,11 +781,22 @@ def run_multi_real_deploy(nodes: list[dict]) -> DeployResult:
     node_results = []
     for entry in entries:
         node = entry["node"]
-        generated_vless_link = build_vless_link(
+        handler = get_protocol(str(node.get("protocol_type") or "vless_reality_singbox"))
+        context = ProtocolBuildContext(
+            node=node,
+            materials={
+                "generated_uuid": entry["generated_uuid"],
+                "generated_public_key": entry.get("generated_public_key") or "",
+                "generated_short_id": entry.get("generated_short_id") or "",
+                "selected_reality_target": entry["selected_reality_target"],
+                "remark": vless_remark_for_node(node, allow_lookup=True),
+            },
+        )
+        generated_vless_link = handler.build_share_link(context) if handler else build_vless_link(
             node,
             generated_uuid=entry["generated_uuid"],
-            generated_public_key=entry["generated_public_key"],
-            generated_short_id=entry["generated_short_id"],
+            generated_public_key=entry.get("generated_public_key") or "",
+            generated_short_id=entry.get("generated_short_id") or "",
             selected_reality_target=entry["selected_reality_target"],
         )
         node_results.append(
@@ -902,7 +924,18 @@ def run_real_deploy(node: dict) -> DeployResult:
             """
         ).strip()
     else:
-        generated_vless_link = build_vless_link(
+        handler = get_protocol(str(node.get("protocol_type") or "vless_reality_singbox"))
+        context = ProtocolBuildContext(
+            node=node,
+            materials={
+                "generated_uuid": generated_uuid,
+                "generated_public_key": generated_public_key,
+                "generated_short_id": generated_short_id,
+                "selected_reality_target": selected_reality_target,
+                "remark": vless_remark_for_node(node, allow_lookup=True),
+            },
+        )
+        generated_vless_link = handler.build_share_link(context) if handler else build_vless_link(
             node,
             generated_uuid=generated_uuid,
             generated_public_key=generated_public_key,
@@ -915,7 +948,8 @@ def run_real_deploy(node: dict) -> DeployResult:
             目标节点：{node['ip']}:{node['ssh_port']}
             监听端口：{node['listen_port']}
             公网端口：{node['public_port']}
-            Reality 目标：{selected_reality_target}
+            协议：{protocol_type}
+            目标/SNI：{selected_reality_target}
             sing-box：{singbox_release['name']}
             """
         ).strip()

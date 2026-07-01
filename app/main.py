@@ -144,6 +144,7 @@ CHAIN_MODE = "vless_reality_to_vless_reality"
 PROTOCOL_DIRECT = "vless_reality_singbox"
 PROTOCOL_CHAIN = "vless_chain"
 PROTOCOL_TUNNEL = "cf_vless_ws"
+PROTOCOL_HYSTERIA2 = "hysteria2"
 PROTOCOL_IMPORT = "imported_vless"
 
 
@@ -162,6 +163,14 @@ def is_import_protocol(protocol_type: object) -> bool:
 
 def is_direct_vless_protocol(protocol_type: object) -> bool:
     return str(protocol_type or "") in {"", PROTOCOL_DIRECT}
+
+
+def is_hysteria2_protocol(protocol_type: object) -> bool:
+    return str(protocol_type or "") == PROTOCOL_HYSTERIA2
+
+
+def is_direct_deploy_protocol(protocol_type: object) -> bool:
+    return str(protocol_type or "") in {"", PROTOCOL_DIRECT, PROTOCOL_HYSTERIA2}
 
 
 def is_chain_backend_protocol(protocol_type: object) -> bool:
@@ -336,7 +345,7 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
         return cleaned, errors
 
     protocol_type = str(form.get("protocol_type") or PROTOCOL_DIRECT).strip() or PROTOCOL_DIRECT
-    if protocol_type not in {PROTOCOL_DIRECT, PROTOCOL_CHAIN, PROTOCOL_TUNNEL, PROTOCOL_IMPORT}:
+    if protocol_type not in {PROTOCOL_DIRECT, PROTOCOL_HYSTERIA2, PROTOCOL_CHAIN, PROTOCOL_TUNNEL, PROTOCOL_IMPORT}:
         errors.append("protocol_type 不支持")
         protocol_type = PROTOCOL_DIRECT
     cleaned["protocol_type"] = protocol_type
@@ -613,7 +622,7 @@ def build_install_command(node: dict | object) -> str:
 
 SUBSCRIPTION_SCOPES = {
     "all": None,
-    "direct": (PROTOCOL_DIRECT, PROTOCOL_TUNNEL),
+    "direct": (PROTOCOL_DIRECT, PROTOCOL_HYSTERIA2, PROTOCOL_TUNNEL),
     "chain": PROTOCOL_CHAIN,
     "imported": PROTOCOL_IMPORT,
 }
@@ -668,6 +677,8 @@ def build_clash_subscription_url(request: Request, scope: str = "all") -> str:
 def display_protocol_label(protocol_type: str | None) -> str:
     if protocol_type == PROTOCOL_TUNNEL:
         return "tunnel"
+    if protocol_type == PROTOCOL_HYSTERIA2:
+        return "hy2"
     if protocol_type == PROTOCOL_CHAIN:
         return "chain"
     if protocol_type == PROTOCOL_IMPORT:
@@ -853,7 +864,7 @@ async def nodes_page(request: Request):
             "can_reinstall": node["protocol_type"] != PROTOCOL_IMPORT,
             "is_chain": is_chain,
         })
-    direct_nodes = [node for node in nodes if node["protocol_type"] in {PROTOCOL_DIRECT, PROTOCOL_TUNNEL}]
+    direct_nodes = [node for node in nodes if node["protocol_type"] in {PROTOCOL_DIRECT, PROTOCOL_HYSTERIA2, PROTOCOL_TUNNEL}]
     chain_nodes = [node for node in nodes if node["is_chain"]]
     import_nodes = [node for node in nodes if node["protocol_type"] == PROTOCOL_IMPORT]
     subscription_urls = {
@@ -1036,7 +1047,7 @@ async def node_create_submit(
         }
     )
 
-    if not errors and is_direct_vless_protocol(payload.get("protocol_type")):
+    if not errors and is_direct_deploy_protocol(payload.get("protocol_type")):
         conflict = find_direct_vless_port_conflict(
             str(payload["ip"]),
             int(payload["public_port"]),
@@ -1443,7 +1454,7 @@ async def node_edit_submit(
         editing_node_id=node_id,
     )
 
-    if not errors and is_direct_vless_protocol(payload.get("protocol_type")):
+    if not errors and is_direct_deploy_protocol(payload.get("protocol_type")):
         conflict = find_direct_vless_port_conflict(
             str(payload["ip"]),
             int(payload["public_port"]),

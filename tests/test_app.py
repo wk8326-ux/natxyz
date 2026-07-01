@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import urllib.parse
@@ -16,6 +17,7 @@ from app.deployer import DeployedNodeResult, DeployResult, build_remote_script, 
 from app.db import create_deployment_record, create_node_record, get_deployment, get_node, init_db, list_chain_backend_nodes, list_direct_vless_nodes, list_nodes, mark_deployment_failed, set_node_generated_fields
 from app.main import app, build_subscription_payload, display_vless_link_for_node
 from app.link_labels import replace_vless_fragment, vless_remark_for_node
+from app.protocols.models import ProtocolBuildContext
 from app.protocols.registry import get_protocol, list_protocols
 
 init_db()
@@ -57,6 +59,65 @@ def test_build_singbox_config_uses_protocol_registry_for_vless_reality() -> None
     assert inbound["users"] == [{"uuid": "11111111-1111-1111-1111-111111111111", "flow": "xtls-rprx-vision"}]
     assert inbound["tls"]["server_name"] == "www.example.com"
     assert inbound["tls"]["reality"]["short_id"] == ["abcd1234"]
+
+
+
+def test_protocol_registry_contains_hysteria2_handler() -> None:
+    handler = get_protocol("hysteria2")
+    assert handler is not None
+    assert handler.display_name == "Hysteria2"
+    assert handler.supports_deploy is True
+    assert handler.supports_subscription is True
+    assert handler.supports_chain_backend is False
+    assert get_protocol("hy2") is handler
+
+
+def test_hysteria2_handler_builds_inbound_and_share_link() -> None:
+    handler = get_protocol("hysteria2")
+    node = {
+        "node_id": "node_hy2",
+        "name": "HY2_NODE",
+        "protocol_type": "hysteria2",
+        "ip": "node.example.com",
+        "public_port": 2443,
+        "listen_port": 2443,
+    }
+    context = ProtocolBuildContext(
+        node=node,
+        materials={
+            "generated_uuid": "hy2-password",
+            "selected_reality_target": "www.example.com",
+            "remark": "HY2_NODE",
+        },
+    )
+    inbound = handler.build_inbound(context)
+    assert inbound["type"] == "hysteria2"
+    assert inbound["tag"] == "hysteria2-node_hy2"
+    assert inbound["listen_port"] == 2443
+    assert inbound["users"] == [{"password": "hy2-password"}]
+    assert inbound["tls"]["server_name"] == "www.example.com"
+    assert inbound["tls"]["certificate_path"] == "/etc/sing-box/hysteria2-cert.pem"
+    assert inbound["tls"]["key_path"] == "/etc/sing-box/hysteria2-key.pem"
+    link = handler.build_share_link(context)
+    assert link.startswith("hy2://hy2-password@node.example.com:2443?")
+    assert "sni=www.example.com" in link
+    assert link.endswith("#HY2_NODE")
+
+
+def test_build_singbox_config_uses_protocol_registry_for_hysteria2() -> None:
+    config = json.loads(
+        build_singbox_config(
+            {"node_id": "node_hy2_config", "protocol_type": "hysteria2", "listen_port": 2444},
+            generated_uuid="hy2-password",
+            generated_private_key="",
+            generated_short_id="",
+            selected_reality_target="www.example.com",
+        )
+    )
+    inbound = config["inbounds"][0]
+    assert inbound["type"] == "hysteria2"
+    assert inbound["tag"] == "hysteria2-node_hy2_config"
+    assert inbound["users"] == [{"password": "hy2-password"}]
 
 
 def login() -> None:
@@ -1034,3 +1095,37 @@ def test_phase2_markdown_exists() -> None:
         content = f.read()
     assert "Phase 2 Development Constraints" in content
     assert "VLESS + Reality -> VLESS + Reality" in content
+
+
+def test_create_hysteria2_node_and_subscription_payload() -> None:
+    login()
+    response = client.post(
+        "/nodes/new",
+        data={
+            "name": "HY2_CREATE_NODE",
+            "ip": "node.example.com",
+            "ssh_port": "2299",
+            "ssh_user": "root",
+            "ssh_password": "hy2-pass",
+            "public_port": "24443",
+            "listen_port": "24443",
+            "protocol_type": "hysteria2",
+            "selected_reality_target": "www.example.com",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    node = get_node(response.headers["location"].rsplit("/", 1)[-1])
+    assert node["protocol_type"] == "hysteria2"
+    assert node["selected_reality_target"] == "www.example.com"
+
+    from app.db import get_conn
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE nodes SET last_vless_link = ?, generated_uuid = ? WHERE node_id = ?",
+            ("hy2://hy2-password@node.example.com:24443?sni=www.example.com#HY2_CREATE_NODE", "hy2-password", node["node_id"]),
+        )
+
+    payload = build_subscription_payload("direct")
+    decoded = base64.b64decode(payload).decode("utf-8")
+    assert "hy2://hy2-password@node.example.com:24443" in decoded

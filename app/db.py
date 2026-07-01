@@ -231,7 +231,7 @@ def list_direct_vless_nodes_by_endpoint(ip: str, ssh_port: int) -> list[sqlite3.
         return conn.execute(
             """
             SELECT * FROM nodes
-            WHERE protocol_type = 'vless_reality_singbox'
+            WHERE protocol_type IN ('vless_reality_singbox', 'hysteria2')
               AND ip = ?
               AND ssh_port = ?
             ORDER BY created_at ASC, updated_at ASC
@@ -249,7 +249,7 @@ def find_direct_vless_port_conflict(
 ) -> sqlite3.Row | None:
     query = """
         SELECT * FROM nodes
-        WHERE protocol_type = 'vless_reality_singbox'
+        WHERE protocol_type IN ('vless_reality_singbox', 'hysteria2')
           AND ip = ?
           AND (public_port = ? OR listen_port = ?)
     """
@@ -281,7 +281,7 @@ def get_node(node_id: str) -> sqlite3.Row | None:
 
 
 def find_node_by_endpoint(ip: str, ssh_port: int, exclude_node_id: str | None = None) -> sqlite3.Row | None:
-    query = "SELECT * FROM nodes WHERE ip = ? AND ssh_port = ? AND protocol_type = 'vless_reality_singbox'"
+    query = "SELECT * FROM nodes WHERE ip = ? AND ssh_port = ? AND protocol_type IN ('vless_reality_singbox', 'hysteria2')"
     params: list[Any] = [ip, ssh_port]
     if exclude_node_id:
         query += " AND node_id != ?"
