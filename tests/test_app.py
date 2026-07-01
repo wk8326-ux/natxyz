@@ -1097,6 +1097,13 @@ def test_phase2_markdown_exists() -> None:
     assert "VLESS + Reality -> VLESS + Reality" in content
 
 
+
+def test_create_node_form_renders_hysteria2_protocol_value() -> None:
+    login()
+    response = client.get("/nodes/new")
+    assert response.status_code == 200
+    assert 'value="hysteria2"' in response.text
+
 def test_create_hysteria2_node_and_subscription_payload() -> None:
     login()
     response = client.post(

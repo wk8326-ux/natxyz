@@ -548,6 +548,7 @@ def render_node_form(
             "protocol_chain": PROTOCOL_CHAIN,
             "protocol_tunnel": PROTOCOL_TUNNEL,
             "protocol_import": PROTOCOL_IMPORT,
+            "protocol_hysteria2": PROTOCOL_HYSTERIA2,
             "chain_mode": CHAIN_MODE,
             "form_kind": form_kind,
             "is_chain_form": form_kind == "chain" or form_values.get("protocol_type") == PROTOCOL_CHAIN,
