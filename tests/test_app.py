@@ -7,13 +7,14 @@ import urllib.parse
 import uuid
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("NAT_WEBUI_DB_PATH", f"/tmp/nat_webui_test_{uuid.uuid4().hex}.db")
 
 from app import jobs, main
 from app.chain_deployer import build_front_chain_config
-from app.deployer import DeployedNodeResult, DeployResult, build_agent_script, build_remote_script, build_singbox_config, build_vless_link, choose_reality_target, generate_reality_materials, resolve_host_for_ssh
+from app.deployer import DeployedNodeResult, DeployResult, build_agent_script, build_remote_script, build_singbox_config, build_vless_link, choose_reality_target, extract_pem_certificate, generate_reality_materials, resolve_host_for_ssh
 from app.db import create_deployment_record, create_node_record, get_deployment, get_node, init_db, list_chain_backend_nodes, list_direct_vless_nodes, list_nodes, mark_deployment_failed, set_node_generated_fields
 from app.main import app, build_clash_subscription_payload, build_subscription_payload, display_vless_link_for_node
 from app.link_labels import replace_vless_fragment, vless_remark_for_node
@@ -142,6 +143,118 @@ def test_build_singbox_config_uses_protocol_registry_for_hysteria2() -> None:
     assert inbound["tls"]["min_version"] == "1.3"
     assert inbound["tls"]["max_version"] == "1.3"
 
+
+
+def test_protocol_registry_contains_anytls_handler() -> None:
+    handler = get_protocol("anytls")
+    assert handler is not None
+    assert handler.display_name == "AnyTLS"
+    assert handler.supports_deploy is True
+    assert handler.supports_subscription is True
+    assert handler.supports_chain_backend is False
+    assert get_protocol("anytls_singbox") is handler
+
+
+def test_anytls_handler_builds_inbound_and_share_link() -> None:
+    handler = get_protocol("anytls")
+    node = {
+        "node_id": "node_anytls",
+        "name": "ANYTLS_NODE",
+        "protocol_type": "anytls",
+        "ip": "node.example.com",
+        "public_port": 2443,
+        "listen_port": 2443,
+        "selected_reality_target": "www.example.com",
+    }
+    context = ProtocolBuildContext(
+        node=node,
+        materials={
+            "generated_uuid": "anytls-password",
+            "certificate_public_key_sha256": "VlS7cOEt+f5NEknYt6n5PtVdu+B6eUrQh6Hz/pWJ3us=",
+            "certificate_sha256": "b2:c0:a1:d9:a3:d4:e5:f6:78:90:12:34:56:78:9a:bc:de:f0:12:34:56:78:9a:bc:de:f0:12:34:56:78:9a:bc",
+            "tls_certificate": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+        },
+    )
+    inbound = handler.build_inbound(context)
+    assert inbound["type"] == "anytls"
+    assert inbound["tag"] == "anytls-in-node_anytls"
+    assert inbound["listen"] == "::"
+    assert inbound["listen_port"] == 2443
+    assert inbound["users"] == [{"password": "anytls-password"}]
+    assert inbound["padding_scheme"] == []
+    assert inbound["tls"]["server_name"] == "www.example.com"
+    assert inbound["tls"]["certificate_path"] == "/etc/sing-box/anytls-cert.pem"
+    assert inbound["tls"]["key_path"] == "/etc/sing-box/anytls-key.pem"
+
+    link = handler.build_share_link(context)
+    assert link.startswith("anytls://anytls-password@node.example.com:2443?")
+    assert "sni=www.example.com" in link
+    assert "insecure=1" in link
+    assert "pinSHA256=VlS7cOEt%2Bf5NEknYt6n5PtVdu%2BB6eUrQh6Hz%2FpWJ3us%3D" in link
+    assert "pinnedPeerCertSha256=VlS7cOEt%2Bf5NEknYt6n5PtVdu%2BB6eUrQh6Hz%2FpWJ3us%3D" in link
+    assert "hpkp=b2%3Ac0%3Aa1%3Ad9%3Aa3%3Ad4%3Ae5%3Af6%3A78%3A90%3A12%3A34%3A56%3A78%3A9a%3Abc%3Ade%3Af0%3A12%3A34%3A56%3A78%3A9a%3Abc%3Ade%3Af0%3A12%3A34%3A56%3A78%3A9a%3Abc" in link
+    assert "tls_certificate=" not in link
+    assert "-----BEGIN" not in link
+    assert link.endswith("#ANYTLS_NODE")
+
+
+def test_build_singbox_config_uses_protocol_registry_for_anytls() -> None:
+    config = json.loads(
+        build_singbox_config(
+            {"node_id": "node_anytls_config", "protocol_type": "anytls", "listen_port": 2444, "selected_reality_target": "www.example.com"},
+            generated_uuid="anytls-password",
+            generated_private_key="",
+            generated_short_id="",
+            selected_reality_target="www.example.com",
+        )
+    )
+    inbound = config["inbounds"][0]
+    assert inbound["type"] == "anytls"
+    assert inbound["tag"] == "anytls-in-node_anytls_config"
+    assert inbound["users"] == [{"password": "anytls-password"}]
+    assert inbound["padding_scheme"] == []
+    assert inbound["tls"]["server_name"] == "www.example.com"
+
+
+def test_anytls_link_to_clash_subscription_payload() -> None:
+    node_id = create_node_record(
+        {
+            "name": "ANYTLS_SUB",
+            "ip": "node.example.com",
+            "ssh_port": 2222,
+            "ssh_user": "root",
+            "ssh_password": "pass",
+            "public_port": 2443,
+            "listen_port": 2443,
+            "protocol_type": "anytls",
+            "selected_reality_target": "www.example.com",
+            "last_vless_link": "anytls://passw0rd@node.example.com:2443?sni=www.example.com&fp=chrome&insecure=1&pinSHA256=VlS7cOEt%2Bf5NEknYt6n5PtVdu%2BB6eUrQh6Hz%2FpWJ3us%3D#ANYTLS_SUB",
+        }
+    )
+    set_node_generated_fields(
+        node_id,
+        selected_reality_target="www.example.com",
+        generated_uuid="passw0rd",
+        generated_public_key="VlS7cOEt+f5NEknYt6n5PtVdu+B6eUrQh6Hz/pWJ3us=",
+        generated_short_id="",
+        last_vless_link="anytls://passw0rd@node.example.com:2443?sni=www.example.com&fp=chrome&insecure=1&pinSHA256=VlS7cOEt%2Bf5NEknYt6n5PtVdu%2BB6eUrQh6Hz%2FpWJ3us%3D#ANYTLS_SUB",
+    )
+
+    payload = build_subscription_payload("direct")
+    decoded = base64.b64decode(payload).decode("utf-8")
+    assert "anytls://passw0rd@node.example.com:2443" in decoded
+
+    clash_payload = build_clash_subscription_payload("direct")
+    clash = yaml.safe_load(clash_payload)
+    proxy = next(item for item in clash["proxies"] if item["name"] == "ANYTLS_SUB")
+    assert proxy["type"] == "anytls"
+    assert proxy["server"] == "node.example.com"
+    assert proxy["port"] == 2443
+    assert proxy["password"] == "passw0rd"
+    assert proxy["sni"] == "www.example.com"
+    assert proxy["client-fingerprint"] == "chrome"
+    assert proxy["skip-cert-verify"] is True
+    assert proxy["certificate-public-key-sha256"] == "VlS7cOEt+f5NEknYt6n5PtVdu+B6eUrQh6Hz/pWJ3us="
 
 def login() -> None:
     response = client.post(
@@ -503,6 +616,40 @@ def test_hysteria2_remote_script_checks_udp_listener() -> None:
     assert "ss_listen_args='-lunp'" in script
     assert "ss_check_args='-lun'" in script
     assert "ss -ltn | awk" not in script
+
+
+def test_extract_pem_certificate_ignores_ssh_warning() -> None:
+    output = """-----BEGIN CERTIFICATE-----
+MIIB
+-----END CERTIFICATE-----
+Warning: Permanently added '[node.example.com]:20009' (ED25519) to the list of known hosts.
+"""
+
+    assert extract_pem_certificate(output) == "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+
+
+def test_anytls_remote_script_checks_tcp_listener_and_generates_certificate() -> None:
+    node = {
+        "node_id": "node_anytls_remote",
+        "protocol_type": "anytls",
+        "ip": "node.example.com",
+        "listen_port": 2444,
+        "agent_token": "agent-token",
+    }
+    script = build_remote_script(
+        node,
+        singbox_config='{"inbounds":[{"type":"anytls","tls":{"server_name":"www.example.com","certificate_path":"/etc/sing-box/anytls-cert.pem","key_path":"/etc/sing-box/anytls-key.pem"}}]}',
+        node_meta='{}',
+        agent_script='#!/bin/sh\n',
+        singbox_archive_url="mirror.invalid/sing-box.tar.gz",
+        singbox_archive_name="sing-box.tar.gz",
+    )
+
+    assert "'hysteria2', 'anytls'" in script
+    assert "anytls-cert.pem" in script
+    assert "ss_listen_args='-ltnp'" in script
+    assert "ss_check_args='-ltn'" in script
+
 
 def test_remote_executor_error_includes_remote_output(monkeypatch) -> None:
     from app.deployer import RemoteCommandError, RemoteExecutor
@@ -1216,10 +1363,11 @@ def test_create_hysteria2_node_and_subscription_payload() -> None:
 
     xray_payload = build_subscription_payload("direct", client="xray")
     xray_decoded = base64.b64decode(xray_payload).decode("utf-8")
-    assert "pinSHA256=b2c0a1d9a3d4e5f67890123456789abcdef0123456789abcdef0123456789ab" in xray_decoded
-    assert "insecure=1" not in xray_decoded
-    assert "pinnedPeerCertSha256=" not in xray_decoded
-    assert "verifyPeerCertByName=" not in xray_decoded
+    hysteria2_line = next(line for line in xray_decoded.splitlines() if "HY2_CREATE_NODE" in line)
+    assert "pinSHA256=b2c0a1d9a3d4e5f67890123456789abcdef0123456789abcdef0123456789ab" in hysteria2_line
+    assert "insecure=1" not in hysteria2_line
+    assert "pinnedPeerCertSha256=" not in hysteria2_line
+    assert "verifyPeerCertByName=" not in hysteria2_line
 
     clash_payload = build_clash_subscription_payload("direct")
     assert "type: hysteria2" in clash_payload

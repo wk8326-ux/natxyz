@@ -167,6 +167,28 @@ def shell_quote(value: str) -> str:
 
 
 
+def first_clean_output_line(output: str) -> str:
+    return next((line.strip() for line in output.splitlines() if line.strip() and not line.startswith("Warning:")), "")
+
+
+
+def extract_pem_certificate(output: str) -> str:
+    lines = []
+    in_certificate = False
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped == "-----BEGIN CERTIFICATE-----":
+            in_certificate = True
+            lines = [stripped]
+            continue
+        if in_certificate:
+            lines.append(stripped)
+            if stripped == "-----END CERTIFICATE-----":
+                return "\n".join(lines) + "\n"
+    return ""
+
+
+
 def choose_reality_target(node: dict | None = None) -> str:
     target = str((node or {}).get("selected_reality_target") or "").strip().lower()
     return target or "www.example.com"
@@ -508,42 +530,48 @@ Path({REMOTE_AGENT_SCRIPT!r}).write_text({agent_script!r})
 Path('/etc/init.d/sing-box').write_text({openrc_script!r})
 Path('/etc/systemd/system/sing-box.service').write_text({systemd_script!r})
 PYEOF
-        if grep -q '"type": "hysteria2"' {shell_quote(REMOTE_SINGBOX_CONFIG)}; then
+        if grep -Eq '"type": "(hysteria2|anytls)"' {shell_quote(REMOTE_SINGBOX_CONFIG)}; then
           if ! command -v openssl >/dev/null 2>&1; then
-            echo 'ERROR: openssl unavailable for Hysteria2 self-signed certificate'
+            echo 'ERROR: openssl unavailable for self-signed certificate'
             exit 1
           fi
-          hy2_server_name=$(python3 - <<'PYEOF_HY2'
+          python3 - <<'PYEOF_CERTS'
 import json
-cfg=json.load(open({REMOTE_SINGBOX_CONFIG!r}))
+import subprocess
+from pathlib import Path
+
+cfg = json.load(open({REMOTE_SINGBOX_CONFIG!r}))
+cert_specs = []
 for inbound in cfg.get('inbounds', []):
-    if inbound.get('type') == 'hysteria2':
-        print((inbound.get('tls') or {{}}).get('server_name') or 'www.example.com')
-        break
-else:
-    print('www.example.com')
-PYEOF_HY2
-)
-          cert_subject=$(openssl x509 -in /etc/sing-box/hysteria2-cert.pem -noout -subject 2>/dev/null || true)
-          cert_san=$(openssl x509 -in /etc/sing-box/hysteria2-cert.pem -noout -ext subjectAltName 2>/dev/null || true)
-          if [ ! -s /etc/sing-box/hysteria2-cert.pem ] || [ ! -s /etc/sing-box/hysteria2-key.pem ] || ! printf '%s' "$cert_subject" | grep -Fq "CN = $hy2_server_name" || ! printf '%s' "$cert_san" | grep -Fq "DNS:$hy2_server_name"; then
-            if openssl req -help 2>&1 | grep -q -- '-addext'; then
-              openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/sing-box/hysteria2-key.pem -out /etc/sing-box/hysteria2-cert.pem -days 3650 -subj "/CN=$hy2_server_name" -addext "subjectAltName = DNS:$hy2_server_name" >/dev/null 2>&1
-            else
-              cat > /tmp/hysteria2-openssl.cnf <<EOF_HY2_CERT
-[req]
-distinguished_name=req_distinguished_name
-x509_extensions=v3_req
-prompt=no
-[req_distinguished_name]
-CN=$hy2_server_name
-[v3_req]
-subjectAltName=DNS:$hy2_server_name
-EOF_HY2_CERT
-              openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/sing-box/hysteria2-key.pem -out /etc/sing-box/hysteria2-cert.pem -days 3650 -config /tmp/hysteria2-openssl.cnf >/dev/null 2>&1
-            fi
-            chmod 600 /etc/sing-box/hysteria2-key.pem
-          fi
+    inbound_type = inbound.get('type')
+    if inbound_type not in {'hysteria2', 'anytls'}:
+        continue
+    tls = inbound.get('tls') or {{}}
+    cert_path = tls.get('certificate_path')
+    key_path = tls.get('key_path')
+    server_name = tls.get('server_name') or 'www.example.com'
+    if cert_path and key_path:
+        cert_specs.append((str(cert_path), str(key_path), str(server_name)))
+
+for cert_path, key_path, server_name in cert_specs:
+    cert_file = Path(cert_path)
+    key_file = Path(key_path)
+    need_generate = not cert_file.exists() or not key_file.exists() or cert_file.stat().st_size == 0 or key_file.stat().st_size == 0
+    if not need_generate:
+        subject = subprocess.run(['openssl', 'x509', '-in', cert_path, '-noout', '-subject'], text=True, capture_output=True)
+        san = subprocess.run(['openssl', 'x509', '-in', cert_path, '-noout', '-ext', 'subjectAltName'], text=True, capture_output=True)
+        need_generate = f'CN = {{server_name}}' not in subject.stdout or f'DNS:{{server_name}}' not in san.stdout
+    if not need_generate:
+        continue
+    help_text = subprocess.run(['openssl', 'req', '-help'], text=True, capture_output=True).stdout + subprocess.run(['openssl', 'req', '-help'], text=True, capture_output=True).stderr
+    if '-addext' in help_text:
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key_path, '-out', cert_path, '-days', '3650', '-subj', f'/CN={{server_name}}', '-addext', f'subjectAltName = DNS:{{server_name}}'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        conf_path = '/tmp/natwebui-openssl.cnf'
+        Path(conf_path).write_text(f'''[req]\ndistinguished_name=req_distinguished_name\nx509_extensions=v3_req\nprompt=no\n[req_distinguished_name]\nCN={{server_name}}\n[v3_req]\nsubjectAltName=DNS:{{server_name}}\n''')
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key_path, '-out', cert_path, '-days', '3650', '-config', conf_path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    key_file.chmod(0o600)
+PYEOF_CERTS
         fi
         chmod +x {shell_quote(REMOTE_AGENT_SCRIPT)} /etc/init.d/sing-box
         if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
@@ -1039,17 +1067,21 @@ def run_real_deploy(node: dict) -> DeployResult:
                 "remark": vless_remark_for_node(node, allow_lookup=True),
             },
         )
-        if handler and protocol_type == "hysteria2":
+        if handler and protocol_type in {"hysteria2", "anytls"}:
+            cert_file = "/etc/sing-box/anytls-cert.pem" if protocol_type == "anytls" else "/etc/sing-box/hysteria2-cert.pem"
             try:
-                certificate_output = executor.run("openssl x509 -in /etc/sing-box/hysteria2-cert.pem -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | base64", timeout=25)
-                certificate_pin = next((line.strip() for line in certificate_output.splitlines() if line.strip() and not line.startswith("Warning:")), "")
-                certificate_sha_output = executor.run("openssl x509 -in /etc/sing-box/hysteria2-cert.pem -outform DER 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | base64", timeout=25)
-                certificate_sha256 = next((line.strip() for line in certificate_sha_output.splitlines() if line.strip() and not line.startswith("Warning:")), "")
+                certificate_output = executor.run(f"openssl x509 -in {cert_file} -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | base64", timeout=25)
+                certificate_pin = first_clean_output_line(certificate_output)
+                certificate_sha_output = executor.run(f"openssl x509 -in {cert_file} -outform DER 2>/dev/null | openssl dgst -sha256 -hex 2>/dev/null | awk '{{print $2}}' | sed 's/../&:/g; s/:$//'", timeout=25)
+                certificate_sha256 = first_clean_output_line(certificate_sha_output)
+                certificate_pem = extract_pem_certificate(executor.run(f"cat {cert_file}", timeout=25))
             except Exception:
                 certificate_pin = ""
                 certificate_sha256 = ""
+                certificate_pem = ""
             context.materials["certificate_public_key_sha256"] = certificate_pin
             context.materials["certificate_sha256"] = certificate_sha256
+            context.materials["tls_certificate"] = certificate_pem
             generated_public_key = certificate_pin or generated_public_key
             sync_remote_certificate_pin(executor, str(node["node_id"]), certificate_pin)
         generated_vless_link = handler.build_share_link(context) if handler else build_vless_link(

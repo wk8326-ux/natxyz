@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
+from . import protocols as _protocols
 from .auth import login_required, verify_login
 from .chain_deployer import apply_front_chain_config
 from .config import AGENT_REPORT_PATH, APP_DIR, APP_NAME, SESSION_COOKIE, SESSION_SECRET, STATUS_STALE_MINUTES
@@ -62,6 +63,7 @@ app.add_middleware(
 )
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
+_protocols  # ensure protocol handlers are registered
 
 
 @app.on_event("startup")
@@ -145,6 +147,7 @@ PROTOCOL_DIRECT = "vless_reality_singbox"
 PROTOCOL_CHAIN = "vless_chain"
 PROTOCOL_TUNNEL = "cf_vless_ws"
 PROTOCOL_HYSTERIA2 = "hysteria2"
+PROTOCOL_ANYTLS = "anytls"
 PROTOCOL_IMPORT = "imported_vless"
 
 
@@ -169,8 +172,12 @@ def is_hysteria2_protocol(protocol_type: object) -> bool:
     return str(protocol_type or "") == PROTOCOL_HYSTERIA2
 
 
+def is_anytls_protocol(protocol_type: object) -> bool:
+    return str(protocol_type or "") == PROTOCOL_ANYTLS
+
+
 def is_direct_deploy_protocol(protocol_type: object) -> bool:
-    return str(protocol_type or "") in {"", PROTOCOL_DIRECT, PROTOCOL_HYSTERIA2}
+    return str(protocol_type or "") in {"", PROTOCOL_DIRECT, PROTOCOL_HYSTERIA2, PROTOCOL_ANYTLS}
 
 
 def is_chain_backend_protocol(protocol_type: object) -> bool:
@@ -351,7 +358,7 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
         return cleaned, errors
 
     protocol_type = str(form.get("protocol_type") or PROTOCOL_DIRECT).strip() or PROTOCOL_DIRECT
-    if protocol_type not in {PROTOCOL_DIRECT, PROTOCOL_HYSTERIA2, PROTOCOL_CHAIN, PROTOCOL_TUNNEL, PROTOCOL_IMPORT}:
+    if protocol_type not in {PROTOCOL_DIRECT, PROTOCOL_HYSTERIA2, PROTOCOL_ANYTLS, PROTOCOL_CHAIN, PROTOCOL_TUNNEL, PROTOCOL_IMPORT}:
         errors.append("protocol_type 不支持")
         protocol_type = PROTOCOL_DIRECT
     cleaned["protocol_type"] = protocol_type
@@ -507,6 +514,7 @@ def protocol_label(protocol_type: object) -> str:
         PROTOCOL_IMPORT: "import",
         "hy2": "hy2",
         "hysteria2": "hy2",
+        PROTOCOL_ANYTLS: "anytls",
     }
     return mapping.get(str(protocol_type or ""), str(protocol_type or "-"))
 
@@ -562,6 +570,7 @@ def render_node_form(
             "protocol_tunnel": PROTOCOL_TUNNEL,
             "protocol_import": PROTOCOL_IMPORT,
             "protocol_hysteria2": PROTOCOL_HYSTERIA2,
+            "protocol_anytls": PROTOCOL_ANYTLS,
             "chain_mode": CHAIN_MODE,
             "form_kind": form_kind,
             "is_chain_form": form_kind == "chain" or form_values.get("protocol_type") == PROTOCOL_CHAIN,
@@ -636,7 +645,7 @@ def build_install_command(node: dict | object) -> str:
 
 SUBSCRIPTION_SCOPES = {
     "all": None,
-    "direct": (PROTOCOL_DIRECT, PROTOCOL_HYSTERIA2, PROTOCOL_TUNNEL),
+    "direct": (PROTOCOL_DIRECT, PROTOCOL_HYSTERIA2, PROTOCOL_ANYTLS, PROTOCOL_TUNNEL),
     "chain": PROTOCOL_CHAIN,
     "imported": PROTOCOL_IMPORT,
 }
@@ -696,6 +705,8 @@ def display_protocol_label(protocol_type: str | None) -> str:
         return "tunnel"
     if protocol_type == PROTOCOL_HYSTERIA2:
         return "hy2"
+    if protocol_type == PROTOCOL_ANYTLS:
+        return "anytls"
     if protocol_type == PROTOCOL_CHAIN:
         return "chain"
     if protocol_type == PROTOCOL_IMPORT:
@@ -871,6 +882,33 @@ def _hysteria2_link_to_clash_proxy(link: str) -> dict[str, object] | None:
     return proxy
 
 
+def _anytls_link_to_clash_proxy(link: str) -> dict[str, object] | None:
+    try:
+        parsed = urllib.parse.urlparse(link)
+    except ValueError:
+        return None
+    if parsed.scheme != "anytls" or not parsed.hostname or not parsed.username:
+        return None
+    query = urllib.parse.parse_qs(parsed.query)
+    name = urllib.parse.unquote(parsed.fragment or parsed.hostname)
+    sni = _query_first(query, "sni") or _query_first(query, "peer")
+    pin_sha256 = _query_first(query, "pinSHA256") or _query_first(query, "pinnedPeerCertSha256")
+    proxy: dict[str, object] = {
+        "name": name,
+        "type": "anytls",
+        "server": parsed.hostname,
+        "port": parsed.port or 443,
+        "password": urllib.parse.unquote(parsed.username),
+        "sni": sni,
+        "client-fingerprint": _query_first(query, "fp", "chrome") or "chrome",
+        "skip-cert-verify": _query_first(query, "insecure") in {"1", "true", "True"},
+        "udp": True,
+    }
+    if pin_sha256:
+        proxy["certificate-public-key-sha256"] = _pin_sha256_to_base64(pin_sha256)
+    return proxy
+
+
 def build_clash_subscription_payload(scope: str = "all") -> str:
     protocol_type = SUBSCRIPTION_SCOPES[normalize_subscription_scope(scope)]
     nodes = list_subscribable_nodes(protocol_type)
@@ -885,6 +923,8 @@ def build_clash_subscription_payload(scope: str = "all") -> str:
         proxy = _vless_link_to_clash_proxy(link)
         if not proxy:
             proxy = _hysteria2_link_to_clash_proxy(link)
+        if not proxy:
+            proxy = _anytls_link_to_clash_proxy(link)
         if not proxy:
             continue
         base_name = str(proxy["name"])
@@ -960,7 +1000,7 @@ async def nodes_page(request: Request):
             "can_reinstall": node["protocol_type"] != PROTOCOL_IMPORT,
             "is_chain": is_chain,
         })
-    direct_nodes = [node for node in nodes if node["protocol_type"] in {PROTOCOL_DIRECT, PROTOCOL_HYSTERIA2, PROTOCOL_TUNNEL}]
+    direct_nodes = [node for node in nodes if node["protocol_type"] in {PROTOCOL_DIRECT, PROTOCOL_HYSTERIA2, PROTOCOL_ANYTLS, PROTOCOL_TUNNEL}]
     chain_nodes = [node for node in nodes if node["is_chain"]]
     import_nodes = [node for node in nodes if node["protocol_type"] == PROTOCOL_IMPORT]
     subscription_urls = {
