@@ -27,9 +27,13 @@ class Hysteria2Protocol:
             "listen": "::",
             "listen_port": int(node["listen_port"]),
             "users": [{"password": password}],
+            "ignore_client_bandwidth": False,
             "tls": {
                 "enabled": True,
                 "server_name": server_name,
+                "alpn": ["h3"],
+                "min_version": "1.3",
+                "max_version": "1.3",
                 "certificate_path": "/etc/sing-box/hysteria2-cert.pem",
                 "key_path": "/etc/sing-box/hysteria2-key.pem",
             },
@@ -42,8 +46,16 @@ class Hysteria2Protocol:
         port = int(node.get("public_port") or node.get("listen_port") or 443)
         server_name = str(context.materials.get("selected_reality_target") or "www.example.com").strip() or "www.example.com"
         remark = urllib.parse.quote(str(context.materials.get("remark") or node.get("name") or "Hysteria2"), safe="")
-        query = urllib.parse.urlencode({"sni": server_name, "insecure": "1"})
-        return f"hy2://{password}@{host}:{port}?{query}#{remark}"
+        query = urllib.parse.urlencode(
+            {
+                "peer": server_name,
+                "insecure": "1",
+                "obfs": "none",
+                "upmbps": "100",
+                "downmbps": "100",
+            }
+        )
+        return f"hysteria2://{password}@{host}:{port}?{query}#{remark}"
 
 
 register_protocol(Hysteria2Protocol())

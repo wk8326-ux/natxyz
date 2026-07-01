@@ -778,6 +778,33 @@ def _vless_link_to_clash_proxy(link: str) -> dict[str, object] | None:
     return proxy
 
 
+def _hysteria2_link_to_clash_proxy(link: str) -> dict[str, object] | None:
+    try:
+        parsed = urllib.parse.urlparse(link)
+    except ValueError:
+        return None
+    if parsed.scheme not in {"hysteria2", "hy2"} or not parsed.hostname or not parsed.username:
+        return None
+    query = urllib.parse.parse_qs(parsed.query)
+    name = urllib.parse.unquote(parsed.fragment or parsed.hostname)
+    peer = _query_first(query, "peer") or _query_first(query, "sni")
+    proxy: dict[str, object] = {
+        "name": name,
+        "type": "hysteria2",
+        "server": parsed.hostname,
+        "port": parsed.port or 443,
+        "password": urllib.parse.unquote(parsed.username),
+        "sni": peer,
+        "skip-cert-verify": _query_first(query, "insecure") in {"1", "true", "True"},
+        "up": f"{_query_first(query, 'upmbps', '100')} Mbps",
+        "down": f"{_query_first(query, 'downmbps', '100')} Mbps",
+    }
+    obfs = _query_first(query, "obfs")
+    if obfs and obfs != "none":
+        proxy["obfs"] = obfs
+    return proxy
+
+
 def build_clash_subscription_payload(scope: str = "all") -> str:
     protocol_type = SUBSCRIPTION_SCOPES[normalize_subscription_scope(scope)]
     nodes = list_subscribable_nodes(protocol_type)
@@ -790,6 +817,8 @@ def build_clash_subscription_payload(scope: str = "all") -> str:
         if not link:
             continue
         proxy = _vless_link_to_clash_proxy(link)
+        if not proxy:
+            proxy = _hysteria2_link_to_clash_proxy(link)
         if not proxy:
             continue
         base_name = str(proxy["name"])

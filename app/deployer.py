@@ -475,8 +475,20 @@ PYEOF
             echo 'ERROR: openssl unavailable for Hysteria2 self-signed certificate'
             exit 1
           fi
-          if [ ! -s /etc/sing-box/hysteria2-cert.pem ] || [ ! -s /etc/sing-box/hysteria2-key.pem ]; then
-            openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/sing-box/hysteria2-key.pem -out /etc/sing-box/hysteria2-cert.pem -days 3650 -subj '/CN=www.example.com' >/dev/null 2>&1
+          hy2_server_name=$(python3 - <<'PYEOF_HY2'
+import json
+cfg=json.load(open({shell_quote(REMOTE_SINGBOX_CONFIG)}))
+for inbound in cfg.get('inbounds', []):
+    if inbound.get('type') == 'hysteria2':
+        print((inbound.get('tls') or {{}}).get('server_name') or 'www.example.com')
+        break
+else:
+    print('www.example.com')
+PYEOF_HY2
+)
+          cert_subject=$(openssl x509 -in /etc/sing-box/hysteria2-cert.pem -noout -subject 2>/dev/null || true)
+          if [ ! -s /etc/sing-box/hysteria2-cert.pem ] || [ ! -s /etc/sing-box/hysteria2-key.pem ] || ! printf '%s' "$cert_subject" | grep -Fq "CN = $hy2_server_name"; then
+            openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/sing-box/hysteria2-key.pem -out /etc/sing-box/hysteria2-cert.pem -days 3650 -subj "/CN=$hy2_server_name" >/dev/null 2>&1
             chmod 600 /etc/sing-box/hysteria2-key.pem
           fi
         fi

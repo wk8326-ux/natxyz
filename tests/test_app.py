@@ -15,7 +15,7 @@ from app import jobs, main
 from app.chain_deployer import build_front_chain_config
 from app.deployer import DeployedNodeResult, DeployResult, build_remote_script, build_singbox_config, build_vless_link, choose_reality_target, generate_reality_materials, resolve_host_for_ssh
 from app.db import create_deployment_record, create_node_record, get_deployment, get_node, init_db, list_chain_backend_nodes, list_direct_vless_nodes, list_nodes, mark_deployment_failed, set_node_generated_fields
-from app.main import app, build_subscription_payload, display_vless_link_for_node
+from app.main import app, build_clash_subscription_payload, build_subscription_payload, display_vless_link_for_node
 from app.link_labels import replace_vless_fragment, vless_remark_for_node
 from app.protocols.models import ProtocolBuildContext
 from app.protocols.registry import get_protocol, list_protocols
@@ -95,13 +95,20 @@ def test_hysteria2_handler_builds_inbound_and_share_link() -> None:
     assert inbound["tag"] == "hysteria2-node_hy2"
     assert inbound["listen_port"] == 2443
     assert inbound["users"] == [{"password": "hy2-password"}]
+    assert inbound["ignore_client_bandwidth"] is False
+    assert inbound["tls"]["alpn"] == ["h3"]
+    assert inbound["tls"]["min_version"] == "1.3"
+    assert inbound["tls"]["max_version"] == "1.3"
     assert inbound["tls"]["server_name"] == "www.example.com"
     assert inbound["tls"]["certificate_path"] == "/etc/sing-box/hysteria2-cert.pem"
     assert inbound["tls"]["key_path"] == "/etc/sing-box/hysteria2-key.pem"
     link = handler.build_share_link(context)
-    assert link.startswith("hy2://hy2-password@node.example.com:2443?")
-    assert "sni=www.example.com" in link
+    assert link.startswith("hysteria2://hy2-password@node.example.com:2443?")
+    assert "peer=www.example.com" in link
     assert "insecure=1" in link
+    assert "obfs=none" in link
+    assert "upmbps=100" in link
+    assert "downmbps=100" in link
     assert link.endswith("#HY2_NODE")
 
 
@@ -119,6 +126,10 @@ def test_build_singbox_config_uses_protocol_registry_for_hysteria2() -> None:
     assert inbound["type"] == "hysteria2"
     assert inbound["tag"] == "hysteria2-node_hy2_config"
     assert inbound["users"] == [{"password": "hy2-password"}]
+    assert inbound["ignore_client_bandwidth"] is False
+    assert inbound["tls"]["alpn"] == ["h3"]
+    assert inbound["tls"]["min_version"] == "1.3"
+    assert inbound["tls"]["max_version"] == "1.3"
 
 
 def login() -> None:
@@ -1141,7 +1152,6 @@ def test_phase2_markdown_exists() -> None:
     assert "VLESS + Reality -> VLESS + Reality" in content
 
 
-
 def test_create_node_form_renders_hysteria2_protocol_value() -> None:
     login()
     response = client.get("/nodes/new")
@@ -1174,9 +1184,15 @@ def test_create_hysteria2_node_and_subscription_payload() -> None:
     with get_conn() as conn:
         conn.execute(
             "UPDATE nodes SET last_vless_link = ?, generated_uuid = ? WHERE node_id = ?",
-            ("hy2://hy2-password@node.example.com:24443?sni=www.example.com#HY2_CREATE_NODE", "hy2-password", node["node_id"]),
+            ("hysteria2://hy2-password@node.example.com:24443?peer=www.example.com&insecure=1&obfs=none&upmbps=100&downmbps=100#HY2_CREATE_NODE", "hy2-password", node["node_id"]),
         )
 
     payload = build_subscription_payload("direct")
     decoded = base64.b64decode(payload).decode("utf-8")
-    assert "hy2://hy2-password@node.example.com:24443" in decoded
+    assert "hysteria2://hy2-password@node.example.com:24443" in decoded
+
+    clash_payload = build_clash_subscription_payload("direct")
+    assert "type: hysteria2" in clash_payload
+    assert "skip-cert-verify: true" in clash_payload
+    assert "up: 100 Mbps" in clash_payload
+    assert "down: 100 Mbps" in clash_payload
