@@ -725,7 +725,39 @@ def display_vless_link_for_node(node: sqlite3.Row | dict[str, object], node_by_i
             return link
     return vless_link_with_node_remark(str(node["last_vless_link"] or ""), node, region_source_node=region_source_node)
 
-def build_subscription_payload(scope: str = "all") -> str:
+def _hysteria2_link_for_client(link: str, client: str) -> str:
+    if not link.startswith("hysteria2://") or client != "xray":
+        return link
+    parsed = urllib.parse.urlparse(link)
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    query.pop("insecure", None)
+    ordered = {}
+    for key in [
+        "sni",
+        "peer",
+        "pinSHA256",
+        "pinnedPeerCertSha256",
+        "verifyPeerCertByName",
+        "obfs",
+        "upmbps",
+        "downmbps",
+    ]:
+        if key in query:
+            ordered[key] = query[key][-1]
+    for key, values in query.items():
+        if key not in ordered:
+            ordered[key] = values[-1]
+    return urllib.parse.urlunparse((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        parsed.params,
+        urllib.parse.urlencode(ordered),
+        parsed.fragment,
+    ))
+
+
+def build_subscription_payload(scope: str = "all", client: str = "default") -> str:
     protocol_type = SUBSCRIPTION_SCOPES[normalize_subscription_scope(scope)]
     nodes = list_subscribable_nodes(protocol_type)
     all_nodes = list_nodes()
@@ -733,6 +765,7 @@ def build_subscription_payload(scope: str = "all") -> str:
     links = []
     for node in nodes:
         link = display_vless_link_for_node(node, node_by_id).strip()
+        link = _hysteria2_link_for_client(link, client)
         if link:
             links.append(link)
     plain = "\n".join(links)
@@ -958,11 +991,11 @@ async def rotate_subscription_token_action(request: Request):
 
 
 @app.get("/sub/{token}", response_class=PlainTextResponse, name="subscription_feed")
-async def subscription_feed(token: str, scope: str = "all"):
+async def subscription_feed(token: str, scope: str = "all", client: str = "default"):
     if not validate_subscription_token(token):
         return PlainTextResponse("forbidden", status_code=403)
     scope = normalize_subscription_scope(scope)
-    payload = build_subscription_payload(scope)
+    payload = build_subscription_payload(scope, client=client)
     return PlainTextResponse(
         payload,
         media_type="text/plain; charset=utf-8",
