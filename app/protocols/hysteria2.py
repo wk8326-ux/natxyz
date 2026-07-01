@@ -74,8 +74,9 @@ class Hysteria2Protocol:
             "downmbps": "1000",
         }
         if certificate_pin:
-            query_params["pinSHA256"] = _pin_sha256_for_uri(certificate_pin)
-            query_params["insecure"] = "1"
+            pin_hex = _pin_sha256_for_uri(certificate_pin)
+            query_params["pinSHA256"] = pin_hex
+            query_params["pinnedPeerCertSha256"] = pin_hex
         else:
             query_params["insecure"] = "1"
         query = urllib.parse.urlencode(query_params)
