@@ -81,6 +81,8 @@ def test_hysteria2_handler_builds_inbound_and_share_link() -> None:
         "ip": "node.example.com",
         "public_port": 2443,
         "listen_port": 2443,
+        "hy2_up_mbps": 50,
+        "hy2_down_mbps": 300,
     }
     context = ProtocolBuildContext(
         node=node,
@@ -97,6 +99,8 @@ def test_hysteria2_handler_builds_inbound_and_share_link() -> None:
     assert inbound["tag"] == "hysteria2-node_hy2"
     assert inbound["listen_port"] == 2443
     assert inbound["users"] == [{"password": "hy2-password"}]
+    assert inbound["up_mbps"] == 50
+    assert inbound["down_mbps"] == 300
     assert inbound["ignore_client_bandwidth"] is False
     assert inbound["tls"]["alpn"] == ["h3"]
     assert inbound["tls"]["min_version"] == "1.3"
@@ -112,15 +116,15 @@ def test_hysteria2_handler_builds_inbound_and_share_link() -> None:
     assert "verifyPeerCertByName=www.example.com" in link
     assert "insecure=1" in link
     assert "obfs=none" in link
-    assert "upmbps=200" in link
-    assert "downmbps=1000" in link
+    assert "upmbps=50" in link
+    assert "downmbps=300" in link
     assert link.endswith("#HY2_NODE")
 
 
 def test_build_singbox_config_uses_protocol_registry_for_hysteria2() -> None:
     config = json.loads(
         build_singbox_config(
-            {"node_id": "node_hy2_config", "protocol_type": "hysteria2", "listen_port": 2444},
+            {"node_id": "node_hy2_config", "protocol_type": "hysteria2", "listen_port": 2444, "hy2_up_mbps": 80, "hy2_down_mbps": 400},
             generated_uuid="hy2-password",
             generated_private_key="",
             generated_short_id="",
@@ -131,6 +135,8 @@ def test_build_singbox_config_uses_protocol_registry_for_hysteria2() -> None:
     assert inbound["type"] == "hysteria2"
     assert inbound["tag"] == "hysteria2-node_hy2_config"
     assert inbound["users"] == [{"password": "hy2-password"}]
+    assert inbound["up_mbps"] == 80
+    assert inbound["down_mbps"] == 400
     assert inbound["ignore_client_bandwidth"] is False
     assert inbound["tls"]["alpn"] == ["h3"]
     assert inbound["tls"]["min_version"] == "1.3"

@@ -198,6 +198,8 @@ def node_to_form_values(node) -> dict[str, object]:
         "cf_tunnel_token": node["cf_tunnel_token"] or "",
         "ws_port": node["ws_port"] or 8080,
         "ws_path": node["ws_path"] or "/",
+        "hy2_up_mbps": node["hy2_up_mbps"] or 200,
+        "hy2_down_mbps": node["hy2_down_mbps"] or 1000,
         "last_vless_link": node["last_vless_link"] or "",
     }
 
@@ -223,6 +225,8 @@ def default_form_values() -> dict[str, object]:
         "cf_tunnel_token": "",
         "ws_port": 8080,
         "ws_path": "/",
+        "hy2_up_mbps": 200,
+        "hy2_down_mbps": 1000,
         "last_vless_link": "",
     }
 
@@ -306,6 +310,8 @@ def apply_imported_vless_defaults(cleaned: dict[str, object], link_info: dict[st
     cleaned["cf_tunnel_token"] = None
     cleaned["ws_port"] = 8080
     cleaned["ws_path"] = "/"
+    cleaned["hy2_up_mbps"] = 200
+    cleaned["hy2_down_mbps"] = 1000
     cleaned["last_vless_link"] = str(link_info.get("link") or "")
 
 
@@ -409,6 +415,13 @@ def clean_node_form(form: dict[str, str], *, editing_node_id: str | None = None)
     cleaned["cf_tunnel_token"] = cf_tunnel_token or None
     cleaned["ws_port"] = str(form.get("ws_port") or "8080").strip() or "8080"
     cleaned["ws_path"] = ws_path
+    hy2_up_mbps = str(form.get("hy2_up_mbps") or "200").strip() or "200"
+    hy2_down_mbps = str(form.get("hy2_down_mbps") or "1000").strip() or "1000"
+    for label, raw_value in (("Hysteria2 上行带宽", hy2_up_mbps), ("Hysteria2 下行带宽", hy2_down_mbps)):
+        if not raw_value.isdigit() or int(raw_value) <= 0:
+            errors.append(f"{label}必须是正整数 Mbps")
+    cleaned["hy2_up_mbps"] = int(hy2_up_mbps) if hy2_up_mbps.isdigit() else 200
+    cleaned["hy2_down_mbps"] = int(hy2_down_mbps) if hy2_down_mbps.isdigit() else 1000
 
     if is_chain_protocol(protocol_type):
         front_node_id = str(cleaned["front_node_id"] or "")
@@ -1097,6 +1110,8 @@ async def node_create_submit(
     listen_port: str = Form(""),
     protocol_type: str = Form(PROTOCOL_DIRECT),
     selected_reality_target: str = Form(""),
+    hy2_up_mbps: str = Form("200"),
+    hy2_down_mbps: str = Form("1000"),
     cf_host: str = Form(""),
     cf_tunnel_token: str = Form(""),
     ws_port: str = Form("8080"),
@@ -1118,6 +1133,8 @@ async def node_create_submit(
             "listen_port": listen_port,
             "protocol_type": protocol_type,
             "selected_reality_target": selected_reality_target,
+            "hy2_up_mbps": hy2_up_mbps,
+            "hy2_down_mbps": hy2_down_mbps,
             "cf_host": cf_host,
             "cf_tunnel_token": cf_tunnel_token,
             "ws_port": ws_port,
@@ -1494,6 +1511,8 @@ async def node_edit_submit(
     listen_port: str = Form(""),
     protocol_type: str = Form(PROTOCOL_DIRECT),
     selected_reality_target: str = Form(""),
+    hy2_up_mbps: str = Form("200"),
+    hy2_down_mbps: str = Form("1000"),
     cf_host: str = Form(""),
     cf_tunnel_token: str = Form(""),
     ws_port: str = Form("8080"),
@@ -1524,6 +1543,8 @@ async def node_edit_submit(
             "listen_port": listen_port,
             "protocol_type": protocol_type,
             "selected_reality_target": selected_reality_target,
+            "hy2_up_mbps": hy2_up_mbps,
+            "hy2_down_mbps": hy2_down_mbps,
             "cf_host": cf_host,
             "cf_tunnel_token": cf_tunnel_token,
             "ws_port": ws_port,

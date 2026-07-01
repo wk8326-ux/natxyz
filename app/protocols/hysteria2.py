@@ -29,6 +29,14 @@ def _pin_sha256_for_uri(pin: str) -> str:
     return _normalize_hex_sha256(pin)
 
 
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number > 0 else default
+
+
 class Hysteria2Protocol:
     protocol_type = "hysteria2"
     aliases = ("hy2",)
@@ -43,14 +51,16 @@ class Hysteria2Protocol:
         password = str(context.materials.get("generated_uuid") or "").strip()
         server_name = str(context.materials.get("selected_reality_target") or "www.example.com").strip() or "www.example.com"
         node_id = str(node.get("node_id") or "node")
+        up_mbps = _positive_int(node.get("hy2_up_mbps"), 200)
+        down_mbps = _positive_int(node.get("hy2_down_mbps"), 1000)
         return {
             "type": "hysteria2",
             "tag": f"hysteria2-{node_id}",
             "listen": "::",
             "listen_port": int(node["listen_port"]),
             "users": [{"password": password}],
-            "up_mbps": 200,
-            "down_mbps": 1000,
+            "up_mbps": up_mbps,
+            "down_mbps": down_mbps,
             "ignore_client_bandwidth": False,
             "tls": {
                 "enabled": True,
@@ -72,11 +82,13 @@ class Hysteria2Protocol:
         remark = urllib.parse.quote(str(context.materials.get("remark") or node.get("name") or "Hysteria2"), safe="")
         certificate_pin = str(context.materials.get("certificate_public_key_sha256") or "").strip()
         peer_cert_pin = str(context.materials.get("certificate_sha256") or certificate_pin).strip()
+        up_mbps = _positive_int(node.get("hy2_up_mbps"), 200)
+        down_mbps = _positive_int(node.get("hy2_down_mbps"), 1000)
         query_params = {
             "sni": server_name,
             "obfs": "none",
-            "upmbps": "200",
-            "downmbps": "1000",
+            "upmbps": str(up_mbps),
+            "downmbps": str(down_mbps),
         }
         if certificate_pin:
             pin_hex = _pin_sha256_for_uri(certificate_pin)

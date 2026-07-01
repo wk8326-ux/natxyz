@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     cf_tunnel_token TEXT,
     ws_port INTEGER NOT NULL DEFAULT 8080,
     ws_path TEXT NOT NULL DEFAULT '/',
+    hy2_up_mbps INTEGER NOT NULL DEFAULT 200,
+    hy2_down_mbps INTEGER NOT NULL DEFAULT 1000,
     agent_token TEXT,
     status TEXT NOT NULL DEFAULT 'never_deployed',
     last_seen_at TEXT,
@@ -147,6 +149,8 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "nodes", "cf_tunnel_token", "TEXT")
     _ensure_column(conn, "nodes", "ws_port", "INTEGER NOT NULL DEFAULT 8080")
     _ensure_column(conn, "nodes", "ws_path", "TEXT NOT NULL DEFAULT '/'")
+    _ensure_column(conn, "nodes", "hy2_up_mbps", "INTEGER NOT NULL DEFAULT 200")
+    _ensure_column(conn, "nodes", "hy2_down_mbps", "INTEGER NOT NULL DEFAULT 1000")
 
 
 
@@ -451,9 +455,10 @@ def create_node_record(payload: dict[str, Any]) -> str:
                 selected_reality_target, generated_uuid, generated_private_key,
                 generated_public_key, generated_short_id, last_vless_link,
                 cf_host, cf_tunnel_token, ws_port, ws_path,
+                hy2_up_mbps, hy2_down_mbps,
                 agent_token, status, last_seen_at, last_report_json,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 node_id,
@@ -478,6 +483,8 @@ def create_node_record(payload: dict[str, Any]) -> str:
                 payload.get("cf_tunnel_token"),
                 payload.get("ws_port") or 8080,
                 payload.get("ws_path") or "/",
+                payload.get("hy2_up_mbps") or 200,
+                payload.get("hy2_down_mbps") or 1000,
                 build_agent_token(),
                 "never_deployed",
                 None,
@@ -524,6 +531,8 @@ def update_node_record(node_id: str, payload: dict[str, Any]) -> None:
                 cf_tunnel_token = ?,
                 ws_port = ?,
                 ws_path = ?,
+                hy2_up_mbps = ?,
+                hy2_down_mbps = ?,
                 updated_at = ?
             WHERE node_id = ?
             """,
@@ -547,6 +556,8 @@ def update_node_record(node_id: str, payload: dict[str, Any]) -> None:
                 payload.get("cf_tunnel_token"),
                 payload.get("ws_port") or 8080,
                 payload.get("ws_path") or "/",
+                payload.get("hy2_up_mbps") or 200,
+                payload.get("hy2_down_mbps") or 1000,
                 now_iso(),
                 node_id,
             ),
@@ -721,9 +732,10 @@ def create_demo_node() -> None:
                 selected_reality_target, generated_uuid, generated_private_key,
                 generated_public_key, generated_short_id, last_vless_link,
                 cf_host, cf_tunnel_token, ws_port, ws_path,
+                hy2_up_mbps, hy2_down_mbps,
                 agent_token, status, last_seen_at, last_report_json,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "node_demo_001",
@@ -748,6 +760,8 @@ def create_demo_node() -> None:
                 None,
                 8080,
                 "/",
+                200,
+                1000,
                 "demo-agent-token",
                 "never_deployed",
                 None,

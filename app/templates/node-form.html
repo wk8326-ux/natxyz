@@ -159,8 +159,16 @@
       </label>
       <div class="full-span sni-target-only">
         <div class="field-note vless-note">只填域名，不带 https:// 和端口；脚本会同时写入 Reality server_name / handshake server，端口固定 443。</div>
-        <div class="field-note hy2-note">Hysteria2 第一版使用此域名作为 SNI；证书策略后续继续完善，测试时建议使用可控域名。</div>
+        <div class="field-note hy2-note">Hysteria2 使用此域名作为 SNI，并自动生成带 SAN 的自签证书。</div>
       </div>
+      <label class="hy2-only">
+        <span>HY2 上行 Mbps</span>
+        <input type="number" name="hy2_up_mbps" value="{{ form_values.get('hy2_up_mbps', 200) }}" min="1" step="1">
+      </label>
+      <label class="hy2-only">
+        <span>HY2 下行 Mbps</span>
+        <input type="number" name="hy2_down_mbps" value="{{ form_values.get('hy2_down_mbps', 1000) }}" min="1" step="1">
+      </label>
       <label class="tunnel-only">
         <span>应用路由域名</span>
         <input type="text" name="cf_host" value="{{ form_values.get('cf_host', '') }}" placeholder="node.example.com">
@@ -219,6 +227,7 @@
     const isHy2 = select.value === hysteria2Value;
     const isDirectDeploy = !isTunnel;
     document.querySelectorAll('.tunnel-only').forEach((el) => el.style.display = isTunnel ? '' : 'none');
+    document.querySelectorAll('.hy2-only').forEach((el) => el.style.display = isHy2 ? '' : 'none');
     document.querySelectorAll('.deploy-port-only, .sni-target-only').forEach((el) => el.style.display = isDirectDeploy ? '' : 'none');
     document.querySelectorAll('.vless-note').forEach((el) => el.style.display = (!isTunnel && !isHy2) ? '' : 'none');
     document.querySelectorAll('.hy2-note').forEach((el) => el.style.display = isHy2 ? '' : 'none');
@@ -227,6 +236,7 @@
       el.textContent = isHy2 ? el.dataset.hy2Label : el.dataset.vlessLabel;
     });
     toggleRequired('.tunnel-only', isTunnel);
+    toggleRequired('.hy2-only', isHy2);
     toggleRequired('.deploy-port-only, .sni-target-only', isDirectDeploy);
   };
   select.addEventListener('change', apply);
