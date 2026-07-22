@@ -996,41 +996,57 @@ def mark_node_deployed_from_report(node_id: str, payload: dict[str, Any]) -> Non
     except (TypeError, ValueError):
         return
 
+    def build_report_link() -> str:
+        if str(payload.get("protocol_type") or "") == "hysteria2":
+            import base64
+            from urllib.parse import quote, urlencode
+
+            pin_for_uri = generated_public_key
+            try:
+                decoded_pin = base64.b64decode(generated_public_key, validate=True)
+                if len(decoded_pin) == 32:
+                    pin_for_uri = decoded_pin.hex()
+            except Exception:
+                pass
+            query = urlencode({
+                "sni": selected_reality_target,
+                "obfs": "none",
+                "upmbps": "200",
+                "downmbps": "1000",
+                "pinSHA256": pin_for_uri,
+                "pinnedPeerCertSha256": pin_for_uri,
+            })
+            return f"hysteria2://{generated_uuid}@{public_ip}:{public_port}?{query}#{quote(node_name, safe='')}"
+        return (
+            f"vless://{generated_uuid}@{public_ip}:{public_port}"
+            f"?security=reality&sni={selected_reality_target}"
+            f"&pbk={generated_public_key}&sid={generated_short_id}"
+            f"&type=tcp&flow=xtls-rprx-vision#{node_name}"
+        )
+
     with get_conn() as conn:
-        node = conn.execute("SELECT name, last_vless_link FROM nodes WHERE node_id = ?", (node_id,)).fetchone()
+        node = conn.execute(
+            "SELECT name, generated_uuid, generated_public_key, generated_short_id, last_vless_link FROM nodes WHERE node_id = ?",
+            (node_id,),
+        ).fetchone()
         if not node:
             return
         node_name = node["name"] or node_id
         last_vless_link = node["last_vless_link"] or ""
         if not selected_reality_target:
             selected_reality_target = "www.example.com"
-        if not last_vless_link:
-            if str(payload.get("protocol_type") or "") == "hysteria2":
-                import base64
-                from urllib.parse import quote, urlencode
-                pin_for_uri = generated_public_key
-                try:
-                    decoded_pin = base64.b64decode(generated_public_key, validate=True)
-                    if len(decoded_pin) == 32:
-                        pin_for_uri = decoded_pin.hex()
-                except Exception:
-                    pass
-                query = urlencode({
-                    "sni": selected_reality_target,
-                    "obfs": "none",
-                    "upmbps": "200",
-                    "downmbps": "1000",
-                    "pinSHA256": pin_for_uri,
-                    "pinnedPeerCertSha256": pin_for_uri,
-                })
-                last_vless_link = f"hysteria2://{generated_uuid}@{public_ip}:{public_port}?{query}#{quote(node_name, safe='')}"
-            else:
-                last_vless_link = (
-                    f"vless://{generated_uuid}@{public_ip}:{public_port}"
-                    f"?security=reality&sni={selected_reality_target}"
-                    f"&pbk={generated_public_key}&sid={generated_short_id}"
-                    f"&type=tcp&flow=xtls-rprx-vision#{node_name}"
-                )
+        generated_values_changed = any([
+            generated_uuid and generated_uuid != (node["generated_uuid"] or ""),
+            generated_public_key and generated_public_key != (node["generated_public_key"] or ""),
+            generated_short_id and generated_short_id != (node["generated_short_id"] or ""),
+        ])
+        link_values_stale = bool(last_vless_link) and any([
+            generated_uuid and generated_uuid not in last_vless_link,
+            generated_public_key and generated_public_key not in last_vless_link,
+            generated_short_id and generated_short_id not in last_vless_link,
+        ])
+        if not last_vless_link or generated_values_changed or link_values_stale:
+            last_vless_link = build_report_link()
         conn.execute(
             """
             UPDATE nodes
