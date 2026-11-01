@@ -1009,7 +1009,7 @@ async def nodes_page(request: Request):
         "chain": {"v2rayng": build_subscription_url(request, "chain", client="xray"), "singbox": build_subscription_url(request, "chain"), "clash": build_clash_subscription_url(request, "chain")},
         "imported": {"v2rayng": build_subscription_url(request, "imported", client="xray"), "singbox": build_subscription_url(request, "imported"), "clash": build_clash_subscription_url(request, "imported")},
     }
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request,
         "nodes.html",
         {
@@ -1027,6 +1027,8 @@ async def nodes_page(request: Request):
             "tag_colors": TAG_COLORS,
         },
     )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.post("/subscriptions/rotate-token")

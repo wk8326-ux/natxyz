@@ -14,7 +14,7 @@ os.environ.setdefault("NAT_WEBUI_DB_PATH", f"/tmp/nat_webui_test_{uuid.uuid4().h
 
 from app import jobs, main
 from app.chain_deployer import build_front_chain_config
-from app.deployer import DeployedNodeResult, DeployResult, build_agent_script, build_remote_script, build_singbox_config, build_vless_link, choose_reality_target, extract_pem_certificate, generate_reality_materials, resolve_host_for_ssh
+from app.deployer import DeployedNodeResult, DeployResult, build_agent_script, build_remote_script, build_singbox_config, build_tunnel_remote_script, build_vless_link, choose_reality_target, extract_pem_certificate, generate_reality_materials, resolve_host_for_ssh
 from app.db import create_deployment_record, create_node_record, get_deployment, get_node, init_db, list_chain_backend_nodes, list_direct_vless_nodes, list_nodes, mark_deployment_failed, set_node_generated_fields
 from app.main import app, build_clash_subscription_payload, build_subscription_payload, display_vless_link_for_node
 from app.link_labels import replace_vless_fragment, vless_remark_for_node
@@ -292,6 +292,7 @@ def test_nodes_page_after_login() -> None:
     login()
     response = client.get("/nodes")
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
     assert "节点列表" in response.text
     assert "新建节点" in response.text
     assert "直连节点" in response.text
@@ -299,6 +300,8 @@ def test_nodes_page_after_login() -> None:
     assert "复制直连 v2rayNG 订阅 URL" in response.text
     assert "复制直连 sing-box / NekoBox 订阅 URL" in response.text
     assert "复制链式 Clash 订阅 URL" in response.text
+    assert "const STATUS_REFRESH_MS = 60 * 1000;" in response.text
+    assert "window.location.reload()" in response.text
 
 
 
@@ -616,6 +619,38 @@ def test_hysteria2_remote_script_checks_udp_listener() -> None:
     assert "ss_listen_args='-lunp'" in script
     assert "ss_check_args='-lun'" in script
     assert "ss -ltn | awk" not in script
+
+
+def test_node_remote_scripts_fail_when_agent_cron_cannot_be_installed() -> None:
+    common = {
+        "node_id": "node_cron_guard",
+        "ip": "node.example.com",
+        "listen_port": 2444,
+        "agent_token": "agent-token",
+    }
+    direct = build_remote_script(
+        {**common, "protocol_type": "hysteria2"},
+        singbox_config='{"inbounds":[{"type":"hysteria2"}]}',
+        node_meta="{}",
+        agent_script="#!/bin/sh\n",
+        singbox_archive_url="mirror.invalid/sing-box.tar.gz",
+        singbox_archive_name="sing-box.tar.gz",
+    )
+    tunnel = build_tunnel_remote_script(
+        {**common, "protocol_type": "cf_vless_ws", "cf_tunnel_token": "token"},
+        singbox_config="{}",
+        node_meta="{}",
+        agent_script="#!/bin/sh\n",
+        singbox_assets={"amd64": {"url": "mirror.invalid/sing-box.tar.gz"}},
+    )
+
+    for script in (direct, tunnel):
+        assert "ERROR: crontab is unavailable; cannot install Agent report schedule" in script
+        assert "ERROR: failed to install Agent report schedule" in script
+        assert "ERROR: Agent report schedule verification failed" in script
+        assert "grep -Fqx '* * * * * /opt/natctl/agent/report.sh >> /opt/natctl/logs/agent.log 2>&1'" in script
+        assert "|| true" not in script.split("ERROR: failed to install Agent report schedule", 1)[0].split("if ! command -v crontab", 1)[-1]
+        assert script.rfind("echo 'OK: ") > script.rfind("Agent report schedule verification failed")
 
 
 def test_extract_pem_certificate_ignores_ssh_warning() -> None:

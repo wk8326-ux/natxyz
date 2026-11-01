@@ -231,6 +231,7 @@
 
 <script>
 (function () {
+  const STATUS_REFRESH_MS = 60 * 1000;
   const tabs = Array.from(document.querySelectorAll('.node-tab'));
   const panels = Array.from(document.querySelectorAll('.node-tab-panel'));
   const subscriptionUrls = JSON.parse(document.getElementById('subscriptionUrlsJson')?.textContent || '{}');
@@ -273,6 +274,16 @@
     tab.addEventListener('click', () => activateTab(tab.dataset.tabTarget, true));
   });
   activateTab(window.location.hash.replace('#', '') || 'direct');
+
+  let statusRefreshTimer = window.setTimeout(() => window.location.reload(), STATUS_REFRESH_MS);
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) window.location.reload();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    window.clearTimeout(statusRefreshTimer);
+    statusRefreshTimer = window.setTimeout(() => window.location.reload(), STATUS_REFRESH_MS);
+  });
 
   const rotateButton = document.getElementById('rotateSubscriptionToken');
   const rotateModal = document.getElementById('rotateTokenModal');
