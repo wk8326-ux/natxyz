@@ -15,7 +15,7 @@ os.environ.setdefault("NAT_WEBUI_DB_PATH", f"/tmp/nat_webui_test_{uuid.uuid4().h
 from app import jobs, main
 from app.chain_deployer import build_front_chain_config
 from app.deployer import DeployedNodeResult, DeployResult, build_agent_script, build_remote_script, build_singbox_config, build_tunnel_remote_script, build_vless_link, choose_reality_target, extract_pem_certificate, generate_reality_materials, resolve_host_for_ssh
-from app.db import create_deployment_record, create_node_record, get_deployment, get_node, init_db, list_chain_backend_nodes, list_direct_vless_nodes, list_nodes, mark_deployment_failed, set_node_generated_fields
+from app.db import create_deployment_record, create_import_group, create_node_record, delete_import_group, get_deployment, get_node, init_db, list_chain_backend_nodes, list_direct_vless_nodes, list_import_groups, list_nodes, mark_deployment_failed, set_node_generated_fields
 from app.main import app, build_clash_subscription_payload, build_subscription_payload, display_vless_link_for_node
 from app.link_labels import replace_vless_fragment, vless_remark_for_node
 from app.protocols.models import ProtocolBuildContext
@@ -286,6 +286,40 @@ def test_nodes_requires_login() -> None:
     response = fresh.get("/nodes", follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
+
+
+def test_import_groups_and_group_subscription() -> None:
+    login()
+    group_name = f"测试组-{uuid.uuid4().hex[:6]}"
+    created = client.post("/import-groups", data={"name": group_name}, follow_redirects=False)
+    assert created.status_code == 303
+    group = next(group for group in list_import_groups() if group["name"] == group_name)
+    group_id = group["group_id"]
+
+    imported = client.post(
+        "/nodes/import",
+        data={
+            "import_group_id": group_id,
+            "links": "vless://11111111-1111-1111-1111-111111111111@example.com:443?type=tcp#grouped",
+        },
+        follow_redirects=False,
+    )
+    assert imported.status_code == 200
+    node = next(node for node in list_nodes() if node["protocol_type"] == "imported_vless" and node["import_group_id"] == group_id)
+    assert node["name"]
+
+    nodes_page = client.get("/nodes")
+    assert nodes_page.status_code == 200
+    assert group_name in nodes_page.text
+    payload = build_subscription_payload(f"import_group:{group_id}")
+    grouped_payload = base64.b64decode(payload).decode()
+    assert "example.com:443" in grouped_payload
+    assert grouped_payload.count("vless://") == 1
+
+    deleted = client.post(f"/import-groups/{group_id}/delete", follow_redirects=False)
+    assert deleted.status_code == 303
+    assert get_node(node["node_id"])["import_group_id"] is None
+    assert delete_import_group(group_id) is False
 
 
 def test_nodes_page_after_login() -> None:

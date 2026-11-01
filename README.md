@@ -160,7 +160,7 @@ tr '\0' '\n' < /proc/$(cat data/uvicorn.pid)/environ | grep '^NAT_WEBUI_' | sed 
   - 链式节点部署逻辑
   - 负责修改前置机 sing-box 配置：添加链式用户、后端 outbound、route rule
   - 常改位置：后端协议支持、outbound 生成、sing-box route 规则
-  - 重要：sing-box 路由规则字段应使用 `user`，不是 `auth_user`
+  - 重要：VLESS 入站用户路由规则应使用 `auth_user`，不是 `user`
 
 - `app/link_labels.py`
   - VLESS 链接 fragment / 国旗 / 节点名备注生成
