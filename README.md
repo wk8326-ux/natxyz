@@ -17,6 +17,7 @@ GitHub 仓库：`wk8326-ux/natxyz`
 - 管理员登录
 - 节点新增 / 编辑 / 删除 / 详情页
 - 节点标签管理
+- 导入节点多分组：单节点导入和编辑可选择多个分组，批量导入可设置默认分组，订阅按分组关联筛选
 - 节点名内联编辑
 - 节点表格前端排序
 - 地区代码 / 国旗 / 订阅备注生成
@@ -105,7 +106,9 @@ tr '\0' '\n' < /proc/$(cat data/uvicorn.pid)/environ | grep '^NAT_WEBUI_' | sed 
 - `scripts/run-prod.sh`：只加载本地 `.env.runtime`，脚本本身不写生产密码、真实 IP、真实域名或节点链接。
 - `tests/test_app.py`：测试 IP 使用 `198.51.100.x`、`203.0.113.x` 文档保留地址；测试域名使用 `example.com`；测试密码是假值；测试 VLESS 链接是假 UUID + 保留地址。
 - `README.md`：运行示例中的密码通过 `[hidden]` 展示；真实节点信息只用占位说明。
-- `PROJECT_STATUS_HANDOFF.md`、`PHASE2.md`：作为文档一并扫描，要求不写真实节点 IP、真实域名、root 密码、token 或订阅链接。
+- `PROJECT_STATUS_HANDOFF.md`：已改为仓库级交接说明，移除过期本机目录、历史运行状态和测试节点记录，仅保留代码入口、验证和部署原则。
+- `PHASE2.md`、`docs/`：作为文档一并扫描，要求不写真实节点 IP、真实业务域名、root 密码、token 或订阅链接。
+- `scripts/install.sh`、`scripts/start.sh`、`scripts/dev.sh`：只保留配置读取和生成逻辑，不携带生产配置；安装脚本中的密码和 session secret 引用均为运行时变量。
 - `data/`、`logs/`：仓库只保留 `.gitkeep`，真实数据库、缓存和日志都留在服务器本地。
 
 ### 上传前复查范围
